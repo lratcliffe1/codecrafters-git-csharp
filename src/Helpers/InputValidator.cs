@@ -16,4 +16,9 @@ public class InputValidator()
   {
     return true;
   }
+  
+  public static bool ValidateWriteTreeInput(string[] args)
+  {
+    return true;
+  }
 }

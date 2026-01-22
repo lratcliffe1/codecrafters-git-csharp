@@ -1,4 +1,3 @@
-using System.Xml;
 using Helpers;
 
 if (args.Length < 1)
@@ -6,9 +5,6 @@ if (args.Length < 1)
   Console.WriteLine("Please provide a command.");
   return;
 }
-
-// You can use print statements as follows for debugging, they'll be visible when running tests.
-// Console.Error.WriteLine("Logs from your program will appear here!");
 
 string command = args[0];
 
@@ -30,7 +26,7 @@ else if (command == "hash-object")
   if (!InputValidator.ValidateHashObjectInput(args))
     throw new ArgumentException($"Invalid command {command}");
 
-  string hash = BlobHelper.CreateBlob(args[2]);
+  string hash = BlobHelper.CreateBlobFromFile(args[2]);
 
   Console.WriteLine(hash);
 }
@@ -46,6 +42,15 @@ else if (command == "ls-tree")
     output = TreeHelper.FullTree(args[1]);
 
   Console.WriteLine(output);
+}
+else if (command == "write-tree")
+{
+  if (!InputValidator.ValidateWriteTreeInput(args))
+    throw new ArgumentException($"Invalid command {command}");
+
+  string hash = TreeHelper.CreateTree(Directory.GetCurrentDirectory());
+
+  Console.WriteLine(hash);
 }
 else
 {
