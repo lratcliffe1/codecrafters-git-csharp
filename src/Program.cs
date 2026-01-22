@@ -1,6 +1,6 @@
 using Helpers;
 
-if (args is not [string command, ..])
+if (args is not [var command, ..])
 {
   Console.WriteLine("Please provide a command.");
   return;
@@ -8,29 +8,33 @@ if (args is not [string command, ..])
 
 try
 {
-  string output = command switch
+  switch (command)
   {
-    "init" => InitHelper.Init(),
+    case "init":
+      InitHelper.Init();
+      break;
 
-    "cat-file" when InputValidator.ValidateCatFileInput(args)
-        => BlobHelper.ReadBlob(args[2]),
+    case "cat-file" when InputValidator.ValidateCatFileInput(args):
+      // Uses Write (no trailing newline)
+      Console.Write(BlobHelper.ReadBlob(args[2]));
+      break;
 
-    "hash-object" when InputValidator.ValidateHashObjectInput(args)
-        => BlobHelper.CreateBlobFromFile(args[2]),
+    case "hash-object" when InputValidator.ValidateHashObjectInput(args):
+      Console.WriteLine(BlobHelper.CreateBlobFromFile(args[2]));
+      break;
 
-    "ls-tree" when InputValidator.ValidateLsTreeInput(args)
-        => args.Length == 3
-          ? TreeHelper.NameOnlyTree(args[2])
-          : TreeHelper.FullTree(args[1]),
+    case "ls-tree" when InputValidator.ValidateLsTreeInput(args):
+      string output = args.Length == 3 ? TreeHelper.NameOnlyTree(args[2]) : TreeHelper.FullTree(args[1]);
+      Console.WriteLine(output);
+      break;
 
-    "write-tree" when InputValidator.ValidateWriteTreeInput(args)
-        => TreeHelper.CreateTree(Directory.GetCurrentDirectory()),
+    case "write-tree" when InputValidator.ValidateWriteTreeInput(args):
+      Console.WriteLine(TreeHelper.CreateTree(Directory.GetCurrentDirectory()));
+      break;
 
-    _ => throw new ArgumentException($"Unknown or invalid command: {command}")
-  };
-
-  if (!string.IsNullOrEmpty(output))
-    Console.Write(output);
+    default:
+      throw new ArgumentException($"Unknown or invalid command: {command}");
+  }
 }
 catch (ArgumentException ex)
 {
