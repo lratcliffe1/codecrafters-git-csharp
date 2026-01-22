@@ -3,9 +3,13 @@ using Classes;
 
 namespace Helpers;
 
-// tree <size>\0
-// <mode> <name>\0<20_byte_sha>
-// <mode> <name>\0<20_byte_sha>
+/// <summary>
+/// tree <size>\0<mode> <name>\0<20_byte_sha><mode> <name>\0<20_byte_sha>
+/// 
+/// tree <size>\0
+/// <mode> <name>\0<20_byte_sha>
+/// <mode> <name>\0<20_byte_sha>
+/// </summary>
 public class TreeHelper()
 {
   public static string FullTree(string hash)
@@ -54,13 +58,11 @@ public class TreeHelper()
 
     byte[] body = ms.ToArray();
 
-    string headerString = $"tree {body.Length}\0";
-    byte[] header = Encoding.UTF8.GetBytes(headerString);
-
-    byte[] fullTreeObject = header.Concat(body).ToArray();
+    byte[] fullTreeObject = SharedUtils.AddHeaderString(body, "tree");
 
     string hash = SharedUtils.CreateBlobHash(fullTreeObject);
     string blobPath = SharedUtils.CreateBlobPath(hash);
+
     SharedUtils.SaveBlobContent(fullTreeObject, blobPath);
 
     return hash;
@@ -90,11 +92,11 @@ public class TreeHelper()
 
       byte[] fileContent = File.ReadAllBytes(filePath);
 
-      byte[] header = Encoding.UTF8.GetBytes($"blob {fileContent.Length}\0");
-      byte[] fullBlobObject = header.Concat(fileContent).ToArray();
+      byte[] fullBlobObject = SharedUtils.AddHeaderString(fileContent, "blob");
 
       string fileHash = SharedUtils.CreateBlobHash(fullBlobObject);
       string blobPath = SharedUtils.CreateBlobPath(fileHash);
+
       SharedUtils.SaveBlobContent(fullBlobObject, blobPath);
 
       rows.Add(new LsTreeRow("100644", fileHash, fileName));

@@ -1,6 +1,8 @@
 namespace Helpers;
 
-// blob <size>\0<content>
+/// <summary>
+/// blob <size>\0<content>
+/// </summary>
 public class BlobHelper()
 {
   public static string ReadBlob(string hash)
@@ -14,17 +16,14 @@ public class BlobHelper()
 
   public static string CreateBlobFromFile(string path)
   {
-    long fileSize = SharedUtils.ComputeFileSize(path);
+    byte[] contents = File.ReadAllBytes(path);
 
-    string contents = SharedUtils.ReadFileContent(path);
+    byte[] fullTreeObject = SharedUtils.AddHeaderString(contents, "blob");
 
-    contents = SharedUtils.FormatBlobInput("blob", contents, fileSize);
-
-    string hash = SharedUtils.CreateBlobHash(contents);
-
+    string hash = SharedUtils.CreateBlobHash(fullTreeObject);
     string blobPath = SharedUtils.CreateBlobPath(hash);
 
-    SharedUtils.SaveBlobContent(contents, blobPath);
+    SharedUtils.SaveBlobContent(fullTreeObject, blobPath);
 
     return hash;
   }
