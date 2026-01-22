@@ -21,6 +21,12 @@ else if (command == "cat-file")
 
     Console.Write(blob);
 }
+else if (command == "hash-object")
+{
+    string hash = BlobHelper.CreateBlob(args[2]);
+
+    Console.WriteLine(hash);
+}
 else
 {
     throw new ArgumentException($"Unknown command {command}");
