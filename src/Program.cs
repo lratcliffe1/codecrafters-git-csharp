@@ -15,7 +15,6 @@ try
       break;
 
     case "cat-file" when InputValidator.ValidateCatFileInput(args):
-      // Uses Write (no trailing newline)
       Console.Write(BlobHelper.ReadBlob(args[2]));
       break;
 
