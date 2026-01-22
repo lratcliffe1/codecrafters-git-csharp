@@ -8,7 +8,7 @@ public class BlobHelper()
 {
   public static string ReadBlob(string hash)
   {
-    string path = CreateBlobPath(hash);
+    string path = SharedUtils.CreateBlobPath(hash);
 
     string result = ReadBlobContent(path);
 
@@ -25,20 +25,11 @@ public class BlobHelper()
 
     string hash = CreateBlobHash(contents);
 
-    string blobPath = CreateBlobPath(hash);
+    string blobPath = SharedUtils.CreateBlobPath(hash);
     
     SaveBlobContent(contents, blobPath);
 
     return hash;
-  }
-
-  private static string CreateBlobPath(string hash)
-  {
-    string pathBase = ".git/objects/";
-    string hash0_1 = hash[0..2];
-    string hash2_38 = hash[2..];
-
-    return $"{pathBase}/{hash0_1}/{hash2_38}";
   }
 
   private static string ReadBlobContent(string path)
