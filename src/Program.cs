@@ -1,58 +1,38 @@
 using Helpers;
 
-if (args.Length < 1)
+if (args is not [string command, ..])
 {
   Console.WriteLine("Please provide a command.");
   return;
 }
 
-string command = args[0];
-
-if (command == "init")
+try
 {
-  InitHelper.Init();
+  string output = command switch
+  {
+    "init" => InitHelper.Init(),
+
+    "cat-file" when InputValidator.ValidateCatFileInput(args)
+        => BlobHelper.ReadBlob(args[2]),
+
+    "hash-object" when InputValidator.ValidateHashObjectInput(args)
+        => BlobHelper.CreateBlobFromFile(args[2]),
+
+    "ls-tree" when InputValidator.ValidateLsTreeInput(args)
+        => args.Length == 3
+          ? TreeHelper.NameOnlyTree(args[2])
+          : TreeHelper.FullTree(args[1]),
+
+    "write-tree" when InputValidator.ValidateWriteTreeInput(args)
+        => TreeHelper.CreateTree(Directory.GetCurrentDirectory()),
+
+    _ => throw new ArgumentException($"Unknown or invalid command: {command}")
+  };
+
+  if (!string.IsNullOrEmpty(output))
+    Console.Write(output);
 }
-else if (command == "cat-file")
+catch (ArgumentException ex)
 {
-  if (!InputValidator.ValidateCatFileInput(args))
-    throw new ArgumentException($"Invalid command {command}");
-
-  string blob = BlobHelper.ReadBlob(args[2]);
-
-  Console.Write(blob);
-}
-else if (command == "hash-object")
-{
-  if (!InputValidator.ValidateHashObjectInput(args))
-    throw new ArgumentException($"Invalid command {command}");
-
-  string hash = BlobHelper.CreateBlobFromFile(args[2]);
-
-  Console.WriteLine(hash);
-}
-else if (command == "ls-tree")
-{
-  if (!InputValidator.ValidateLsTreeInput(args))
-    throw new ArgumentException($"Invalid command {command}");
-
-  string output;
-  if (args.Length == 3)
-    output = TreeHelper.NameOnlyTree(args[2]);
-  else
-    output = TreeHelper.FullTree(args[1]);
-
-  Console.WriteLine(output);
-}
-else if (command == "write-tree")
-{
-  if (!InputValidator.ValidateWriteTreeInput(args))
-    throw new ArgumentException($"Invalid command {command}");
-
-  string hash = TreeHelper.CreateTree(Directory.GetCurrentDirectory());
-
-  Console.WriteLine(hash);
-}
-else
-{
-  throw new ArgumentException($"Unknown command {command}");
+  Console.WriteLine(ex.Message);
 }
