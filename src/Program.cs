@@ -1,5 +1,4 @@
-using System;
-using System.IO;
+using Helpers;
 
 if (args.Length < 1)
 {
@@ -8,17 +7,19 @@ if (args.Length < 1)
 }
 
 // You can use print statements as follows for debugging, they'll be visible when running tests.
-Console.Error.WriteLine("Logs from your program will appear here!");
+// Console.Error.WriteLine("Logs from your program will appear here!");
 
 string command = args[0];
 
 if (command == "init")
 {
-    Directory.CreateDirectory(".git");
-    Directory.CreateDirectory(".git/objects");
-    Directory.CreateDirectory(".git/refs");
-    File.WriteAllText(".git/HEAD", "ref: refs/heads/main\n");
-    Console.WriteLine("Initialized git directory");
+    InitHelper.Init();
+}
+else if (command == "cat-file")
+{
+    string blob = BlobHelper.ReadBlob(args[2]);
+
+    Console.Write(blob);
 }
 else
 {
