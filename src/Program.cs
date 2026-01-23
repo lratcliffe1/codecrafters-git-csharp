@@ -31,6 +31,10 @@ try
       Console.WriteLine(TreeHelper.CreateTree(Directory.GetCurrentDirectory()));
       break;
 
+    case "commit-tree" when InputValidator.ValidateCommitInput(args):
+      Console.WriteLine(CommitHelper.Commit(args[1], args[3], args[5]));
+      break;
+
     default:
       throw new ArgumentException($"Unknown or invalid command: {command}");
   }

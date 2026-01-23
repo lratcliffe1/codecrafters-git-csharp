@@ -11,13 +11,18 @@ public class InputValidator()
   {
     return true;
   }
-  
+
   public static bool ValidateLsTreeInput(string[] args)
   {
     return true;
   }
-  
+
   public static bool ValidateWriteTreeInput(string[] args)
+  {
+    return true;
+  }
+
+  public static bool ValidateCommitInput(string[] args)
   {
     return true;
   }

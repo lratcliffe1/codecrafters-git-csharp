@@ -26,9 +26,9 @@ public class SharedUtils()
     return result.ToArray();
   }
 
-  public static byte[] AddHeaderString(byte[] contents, string type)
+  public static byte[] AddHeaderString(byte[] contents, string type, string? extraContent = "")
   {
-    string headerString = $"{type} {contents.Length}\0";
+    string headerString = $"{type} {contents.Length}\0{extraContent}";
     byte[] header = Encoding.UTF8.GetBytes(headerString);
 
     return header.Concat(contents).ToArray();
