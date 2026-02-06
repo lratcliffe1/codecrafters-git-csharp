@@ -1,4 +1,6 @@
-namespace Helpers;
+using Helpers;
+
+namespace Commands;
 
 /// <summary>
 /// blob <size>\0<content>

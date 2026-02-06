@@ -1,7 +1,8 @@
 using System.Text;
 using Classes;
+using Helpers;
 
-namespace Helpers;
+namespace Commands;
 
 /// <summary>
 /// tree <size>\0<mode> <name>\0<20_byte_sha><mode> <name>\0<20_byte_sha>

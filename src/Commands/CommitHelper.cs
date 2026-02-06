@@ -1,6 +1,7 @@
 using System.Text;
+using Helpers;
 
-namespace Helpers;
+namespace Commands;
 
 /// <summary>
 /// commit <size>\0tree <tree_sha>
