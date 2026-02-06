@@ -38,7 +38,7 @@ internal sealed class DeltaResolver
     out byte[] resolved)
   {
     baseType = 0;
-    resolved = Array.Empty<byte>();
+    resolved = [];
 
     if (!TryGetBaseObject(objectsByOffset, baseOffset, baseOffsetAlt, out var baseObject))
     {

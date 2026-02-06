@@ -8,11 +8,6 @@ internal sealed class PackfileParser(ObjectStore objectStore)
     var pendingRefDeltas = new List<PendingRefDelta>();
     var pendingOffsetDeltas = new List<PendingOffsetDelta>();
 
-    if (!StartsWithPack(rawData))
-    {
-      throw new Exception("Not a valid Packfile.");
-    }
-
     int objectCount = NetToHostInt32(rawData, 8);
     int offset = 12;
 
@@ -108,15 +103,6 @@ internal sealed class PackfileParser(ObjectStore objectStore)
     }
 
     ResolvePendingDeltas(objectsByOffset, pendingRefDeltas, pendingOffsetDeltas);
-  }
-
-  private static bool StartsWithPack(byte[] data)
-  {
-    return data.Length >= 4 &&
-      data[0] == (byte)'P' &&
-      data[1] == (byte)'A' &&
-      data[2] == (byte)'C' &&
-      data[3] == (byte)'K';
   }
 
   private static int NetToHostInt32(byte[] data, int startIndex)

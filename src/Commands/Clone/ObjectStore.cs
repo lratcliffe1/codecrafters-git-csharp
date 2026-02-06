@@ -5,7 +5,7 @@ namespace Commands;
 
 internal sealed class ObjectStore
 {
-  private readonly Dictionary<string, GitObject> objectsByHash = new();
+  private readonly Dictionary<string, GitObject> objectsByHash = [];
 
   public Dictionary<string, GitObject> ObjectsByHash => objectsByHash;
 
