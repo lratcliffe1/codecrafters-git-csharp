@@ -12,7 +12,7 @@ try
   switch (command)
   {
     case "init":
-      InitHelper.Init();
+      Console.Write(InitHelper.Init());
       break;
 
     case "cat-file" when InputValidator.ValidateCatFileInput(args):
@@ -34,6 +34,10 @@ try
 
     case "commit-tree" when InputValidator.ValidateCommitInput(args):
       Console.WriteLine(CommitHelper.Commit(args[1], args[3], args[5]));
+      break;
+
+    case "clone" when InputValidator.ValidateCloneInput(args):
+      Console.WriteLine(await CloneHelper.Clone(args[1], args[2]));
       break;
 
     default:

@@ -26,4 +26,9 @@ public class InputValidator()
   {
     return true;
   }
+
+  public static bool ValidateCloneInput(string[] args)
+  {
+    return true;
+  }
 }

@@ -51,7 +51,7 @@ public class SharedUtils()
     File.WriteAllBytes(path, compressed);
   }
 
-  public static byte[] ZlibCompress(byte[] input)
+  static byte[] ZlibCompress(byte[] input)
   {
     using MemoryStream outputStream = new MemoryStream();
     using (ZLibStream zLibStream = new ZLibStream(outputStream, CompressionLevel.Optimal))
