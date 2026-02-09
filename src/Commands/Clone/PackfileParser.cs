@@ -64,8 +64,7 @@ internal sealed class PackfileParser(ObjectStore objectStore)
       }
       else if (type == (int)GitType.RefDelta)
       {
-        if (refBaseHash != null &&
-            DeltaResolver.TryApplyRefDelta(objectStore, refBaseHash, objectData, out int baseType, out byte[] resolved))
+        if (refBaseHash != null && DeltaResolver.TryApplyRefDelta(objectStore, refBaseHash, objectData, out int baseType, out byte[] resolved))
         {
           objectStore.StoreObject(baseType, resolved);
           objectsByOffset[objectStartOffset] = new GitObject(baseType, resolved);

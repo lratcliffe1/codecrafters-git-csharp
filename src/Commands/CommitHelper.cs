@@ -21,14 +21,14 @@ public class CommitHelper
 
     byte[] contents = CreateCommitBody(parentHash, author, timestampAndTimezone, message);
 
-    byte[] fullTreeObject = SharedUtils.AddHeaderString(contents, "commit", $"tree {treeHash}\n");
+    byte[] fullCommitObject = SharedUtils.AddHeaderString(contents, "commit", $"tree {treeHash}\n");
 
-    string hash = SharedUtils.CreateBlobHash(fullTreeObject);
-    string blobPath = SharedUtils.CreateBlobPath(hash);
+    string commitHash = SharedUtils.CreateBlobHash(fullCommitObject);
+    string commitPath = SharedUtils.CreateBlobPath(commitHash);
 
-    SharedUtils.SaveBlobContent(fullTreeObject, blobPath);
+    SharedUtils.SaveBlobContent(fullCommitObject, commitPath);
 
-    return hash;
+    return commitHash;
   }
 
   private static string GetFormattedTimestamp()

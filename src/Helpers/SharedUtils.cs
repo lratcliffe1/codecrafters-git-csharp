@@ -11,10 +11,16 @@ public class SharedUtils()
     return $".git/objects/{hash[0..2]}/{hash[2..]}";
   }
 
-  public static string ReadZLibFileToString(string path)
+  public static byte[] ReadObjectBytes(string hash)
   {
-    byte[] decompressedBytes = ReadZLibFileToBytes(path);
-    return Encoding.UTF8.GetString(decompressedBytes);
+    string path = CreateBlobPath(hash);
+    return ReadZLibFileToBytes(path);
+  }
+
+  public static string ReadObjectString(string hash)
+  {
+    string path = CreateBlobPath(hash);
+    return ReadZLibFileToString(path);
   }
 
   public static byte[] ReadZLibFileToBytes(string path)
@@ -24,6 +30,12 @@ public class SharedUtils()
     using var result = new MemoryStream();
     zlibStream.CopyTo(result);
     return result.ToArray();
+  }
+
+  public static string ReadZLibFileToString(string path)
+  {
+    byte[] decompressedBytes = ReadZLibFileToBytes(path);
+    return Encoding.UTF8.GetString(decompressedBytes);
   }
 
   public static byte[] AddHeaderString(byte[] contents, string type, string? extraContent = "")
@@ -53,8 +65,8 @@ public class SharedUtils()
 
   static byte[] ZlibCompress(byte[] input)
   {
-    using MemoryStream outputStream = new MemoryStream();
-    using (ZLibStream zLibStream = new ZLibStream(outputStream, CompressionLevel.Optimal))
+    using var outputStream = new MemoryStream();
+    using (var zLibStream = new ZLibStream(outputStream, CompressionLevel.Optimal))
     {
       zLibStream.Write(input, 0, input.Length);
     }

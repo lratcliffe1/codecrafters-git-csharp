@@ -16,20 +16,19 @@ try
       break;
 
     case "cat-file" when InputValidator.ValidateCatFileInput(args):
-      Console.Write(BlobHelper.ReadBlob(args[2]));
+      Console.Write(BlobHelper.ReadBlobContent(args[2]));
       break;
 
     case "hash-object" when InputValidator.ValidateHashObjectInput(args):
-      Console.WriteLine(BlobHelper.CreateBlobFromFile(args[2]));
+      Console.WriteLine(BlobHelper.WriteBlobObjectFromFile(args[2]));
       break;
 
     case "ls-tree" when InputValidator.ValidateLsTreeInput(args):
-      string output = args.Length == 3 ? TreeHelper.NameOnlyTree(args[2]) : TreeHelper.FullTree(args[1]);
-      Console.WriteLine(output);
+      Console.WriteLine(args.Length == 3 ? TreeHelper.ListTreeNameOnly(args[2]) : TreeHelper.ListTree(args[1]));
       break;
 
     case "write-tree" when InputValidator.ValidateWriteTreeInput(args):
-      Console.WriteLine(TreeHelper.CreateTree(Directory.GetCurrentDirectory()));
+      Console.WriteLine(TreeHelper.WriteTreeObject(Directory.GetCurrentDirectory()));
       break;
 
     case "commit-tree" when InputValidator.ValidateCommitInput(args):

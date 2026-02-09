@@ -13,13 +13,13 @@ namespace Commands;
 /// </summary>
 public class TreeHelper()
 {
-  public static string FullTree(string hash)
+  private const string DirectoryMode = "40000";
+  private const string FileMode = "100644";
+  private const int HashByteLength = 20;
+
+  public static string ListTree(string hash)
   {
-    string path = SharedUtils.CreateBlobPath(hash);
-
-    byte[] data = SharedUtils.ReadZLibFileToBytes(path);
-
-    List<LsTreeRow> rows = GetRows(data);
+    List<LsTreeRow> rows = ReadTreeRowsFromHash(hash);
 
     return string.Join(
       '\n',
@@ -28,13 +28,9 @@ public class TreeHelper()
         .Select(x => $"{x.Mode} {x.ModeName} {x.Hash} \t {x.Name}"));
   }
 
-  public static string NameOnlyTree(string hash)
+  public static string ListTreeNameOnly(string hash)
   {
-    string path = SharedUtils.CreateBlobPath(hash);
-
-    byte[] data = SharedUtils.ReadZLibFileToBytes(path);
-
-    List<LsTreeRow> rows = GetRows(data);
+    List<LsTreeRow> rows = ReadTreeRowsFromHash(hash);
 
     return string.Join(
       '\n',
@@ -43,21 +39,11 @@ public class TreeHelper()
         .Select(x => x.Name));
   }
 
-  public static string CreateTree(string path)
+  public static string WriteTreeObject(string path)
   {
-    List<LsTreeRow> rows = CreateTreeRecursive(path);
+    List<LsTreeRow> rows = BuildTreeRows(path);
 
-    using MemoryStream ms = new MemoryStream();
-    foreach (var row in rows.OrderBy(x => x.Name))
-    {
-      byte[] prefix = Encoding.UTF8.GetBytes($"{row.Mode} {row.Name}\0");
-      ms.Write(prefix, 0, prefix.Length);
-
-      byte[] hashBytes = Convert.FromHexString(row.Hash);
-      ms.Write(hashBytes, 0, hashBytes.Length);
-    }
-
-    byte[] body = ms.ToArray();
+    byte[] body = BuildTreeObjectBytes(rows);
 
     byte[] fullTreeObject = SharedUtils.AddHeaderString(body, "tree");
 
@@ -69,9 +55,9 @@ public class TreeHelper()
     return hash;
   }
 
-  private static List<LsTreeRow> CreateTreeRecursive(string path)
+  private static List<LsTreeRow> BuildTreeRows(string path)
   {
-    List<LsTreeRow> rows = new List<LsTreeRow>();
+    List<LsTreeRow> rows = [];
 
     // 1. Handle Subdirectories
     string[] folders = Directory.GetDirectories(path);
@@ -80,9 +66,9 @@ public class TreeHelper()
       string folderName = Path.GetFileName(folderPath);
       if (folderName == ".git") continue;
 
-      string folderHash = CreateTree(folderPath);
+      string folderHash = WriteTreeObject(folderPath);
 
-      rows.Add(new LsTreeRow("40000", folderHash, folderName));
+      rows.Add(new LsTreeRow(DirectoryMode, folderHash, folderName));
     }
 
     // 2. Handle Files
@@ -90,27 +76,26 @@ public class TreeHelper()
     foreach (var filePath in files)
     {
       string fileName = Path.GetFileName(filePath);
+      string fileHash = WriteBlobObjectFromFile(filePath);
 
-      byte[] fileContent = File.ReadAllBytes(filePath);
-
-      byte[] fullBlobObject = SharedUtils.AddHeaderString(fileContent, "blob");
-
-      string fileHash = SharedUtils.CreateBlobHash(fullBlobObject);
-      string blobPath = SharedUtils.CreateBlobPath(fileHash);
-
-      SharedUtils.SaveBlobContent(fullBlobObject, blobPath);
-
-      rows.Add(new LsTreeRow("100644", fileHash, fileName));
+      rows.Add(new LsTreeRow(FileMode, fileHash, fileName));
     }
 
     return rows;
   }
 
-  private static List<LsTreeRow> GetRows(byte[] data)
+  public static List<LsTreeRow> ParseTreeRows(byte[] data, bool includesHeader)
+  {
+    int startIndex = includesHeader ? GetHeaderEndIndex(data) : 0;
+    if (startIndex < 0) return [];
+    return ParseRowsFromIndex(data, startIndex);
+  }
+
+  private static List<LsTreeRow> ParseRowsFromIndex(byte[] data, int startIndex)
   {
     List<LsTreeRow> result = [];
 
-    int i = Array.IndexOf(data, (byte)0) + 1;
+    int i = startIndex;
 
     while (i < data.Length)
     {
@@ -120,7 +105,7 @@ public class TreeHelper()
       int nullIndex = Array.IndexOf(data, (byte)0, spaceIndex + 1);
       string name = Encoding.UTF8.GetString(data, spaceIndex + 1, nullIndex - (spaceIndex + 1));
 
-      byte[] hashBytes = data[(nullIndex + 1)..(nullIndex + 21)];
+      byte[] hashBytes = data[(nullIndex + 1)..(nullIndex + 1 + HashByteLength)];
       string hexHash = Convert.ToHexString(hashBytes).ToLower();
 
       result.Add(new LsTreeRow(mode.PadLeft(6, '0'), hexHash, name));
@@ -129,5 +114,116 @@ public class TreeHelper()
     }
 
     return result;
+  }
+
+  internal static void CheckoutWorkingTree(ObjectStore objectStore, string targetDirectory, string commitHash)
+  {
+    if (!objectStore.TryGetObjectByHash(commitHash, out var commitObj))
+    {
+      CloneLogger.Log("Commit object not found; skipping checkout.");
+      return;
+    }
+
+    CloneLogger.Log($"Checkout: commit {commitHash} found.");
+
+    string? treeHash = TryGetTreeHashFromCommit(commitObj.Data);
+    if (string.IsNullOrWhiteSpace(treeHash))
+    {
+      CloneLogger.Log("Tree hash not found in commit; skipping checkout.");
+      return;
+    }
+
+    CloneLogger.Log($"Checkout: root tree {treeHash.Trim()}");
+
+    CheckoutTree(objectStore, treeHash.Trim(), targetDirectory);
+  }
+
+  private static void CheckoutTree(ObjectStore objectStore, string treeHash, string targetDirectory)
+  {
+    if (!objectStore.TryGetObjectByHash(treeHash, out var treeObj))
+    {
+      CloneLogger.Log($"Tree lookup failed for {treeHash}. Stored? {objectStore.ObjectsByHash.ContainsKey(treeHash)}");
+      CloneLogger.Log($"Tree object {treeHash} not found; skipping.");
+      return;
+    }
+
+    CloneLogger.Log($"CheckoutTree: {treeHash} -> {targetDirectory}");
+
+    var rows = ParseTreeRows(treeObj.Data, includesHeader: false);
+    foreach (var row in rows)
+    {
+      string path = Path.Combine(targetDirectory, row.Name);
+      if (row.ModeName == "tree")
+      {
+        Directory.CreateDirectory(path);
+        CloneLogger.Log($"Dir: {path} (tree {row.Hash})");
+        CheckoutTree(objectStore, row.Hash, path);
+      }
+      else
+      {
+        if (objectStore.TryGetObjectByHash(row.Hash, out var blobObj))
+        {
+          Directory.CreateDirectory(Path.GetDirectoryName(path) ?? targetDirectory);
+          File.WriteAllBytes(path, blobObj.Data);
+          CloneLogger.Log($"File: {path} (blob {row.Hash}, {blobObj.Data.Length} bytes)");
+        }
+        else
+        {
+          CloneLogger.Log($"Missing blob {row.Hash} for path {path}");
+        }
+      }
+    }
+  }
+
+  private static List<LsTreeRow> ReadTreeRowsFromHash(string hash)
+  {
+    byte[] data = SharedUtils.ReadObjectBytes(hash);
+    return ParseTreeRows(data, includesHeader: true);
+  }
+
+  private static byte[] BuildTreeObjectBytes(IEnumerable<LsTreeRow> rows)
+  {
+    using var ms = new MemoryStream();
+    foreach (var row in rows.OrderBy(x => x.Name))
+    {
+      byte[] prefix = Encoding.UTF8.GetBytes($"{row.Mode} {row.Name}\0");
+      ms.Write(prefix, 0, prefix.Length);
+
+      byte[] hashBytes = Convert.FromHexString(row.Hash);
+      ms.Write(hashBytes, 0, hashBytes.Length);
+    }
+
+    return ms.ToArray();
+  }
+
+  private static string WriteBlobObjectFromFile(string path)
+  {
+    byte[] fileContent = File.ReadAllBytes(path);
+
+    byte[] fullBlobObject = SharedUtils.AddHeaderString(fileContent, "blob");
+
+    string fileHash = SharedUtils.CreateBlobHash(fullBlobObject);
+    string blobPath = SharedUtils.CreateBlobPath(fileHash);
+
+    SharedUtils.SaveBlobContent(fullBlobObject, blobPath);
+
+    return fileHash;
+  }
+
+  private static int GetHeaderEndIndex(byte[] data)
+  {
+    int headerNullIndex = Array.IndexOf(data, (byte)0);
+    return headerNullIndex < 0 ? -1 : headerNullIndex + 1;
+  }
+
+  private static string? TryGetTreeHashFromCommit(byte[] commitData)
+  {
+    string commitText = Encoding.UTF8.GetString(commitData);
+    return commitText
+      .Split('\n')
+      .FirstOrDefault(line => line.StartsWith("tree ", StringComparison.Ordinal))?
+      .Split(' ', 2)
+      .Last()
+      ?.Trim();
   }
 }

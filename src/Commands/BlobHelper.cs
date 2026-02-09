@@ -7,30 +7,28 @@ namespace Commands;
 /// </summary>
 public class BlobHelper()
 {
-  public static string ReadBlob(string hash)
+  public static string ReadBlobContent(string hash)
   {
-    string path = SharedUtils.CreateBlobPath(hash);
+    string result = SharedUtils.ReadObjectString(hash);
 
-    string result = SharedUtils.ReadZLibFileToString(path);
-
-    return FormatBlobOutput(result);
+    return ExtractBlobContent(result);
   }
 
-  public static string CreateBlobFromFile(string path)
+  public static string WriteBlobObjectFromFile(string path)
   {
     byte[] contents = File.ReadAllBytes(path);
 
-    byte[] fullTreeObject = SharedUtils.AddHeaderString(contents, "blob");
+    byte[] fullBlobObject = SharedUtils.AddHeaderString(contents, "blob");
 
-    string hash = SharedUtils.CreateBlobHash(fullTreeObject);
-    string blobPath = SharedUtils.CreateBlobPath(hash);
+    string fileHash = SharedUtils.CreateBlobHash(fullBlobObject);
+    string blobPath = SharedUtils.CreateBlobPath(fileHash);
 
-    SharedUtils.SaveBlobContent(fullTreeObject, blobPath);
+    SharedUtils.SaveBlobContent(fullBlobObject, blobPath);
 
-    return hash;
+    return fileHash;
   }
 
-  private static string FormatBlobOutput(string output)
+  private static string ExtractBlobContent(string output)
   {
     return output.Split("\x00", 2).Last();
   }

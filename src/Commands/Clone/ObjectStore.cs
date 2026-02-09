@@ -17,11 +17,6 @@ internal sealed class ObjectStore
     string blobPath = SharedUtils.CreateBlobPath(hash);
     SharedUtils.SaveBlobContent(headered, blobPath);
     objectsByHash[hash] = new GitObject(type, data);
-
-    if (type == (int)GitType.Tree)
-    {
-      CloneLogger.Log($"Stored tree {hash} ({data.Length} bytes)");
-    }
   }
 
   public bool TryGetObjectByHash(string hash, out GitObject obj)
@@ -40,7 +35,7 @@ internal sealed class ObjectStore
       return false;
     }
 
-    byte[] fullObject = SharedUtils.ReadZLibFileToBytes(path);
+    byte[] fullObject = SharedUtils.ReadObjectBytes(hash);
     int spaceIndex = Array.IndexOf(fullObject, (byte)' ');
     int nullIndex = Array.IndexOf(fullObject, (byte)0, spaceIndex + 1);
     if (spaceIndex < 0 || nullIndex < 0)
@@ -54,7 +49,7 @@ internal sealed class ObjectStore
     byte[] body = fullObject[(nullIndex + 1)..];
     obj = new GitObject(type, body);
     objectsByHash[hash] = obj;
-    CloneLogger.Log($"Object {hash} loaded from disk ({typeName})");
+
     return true;
   }
 
