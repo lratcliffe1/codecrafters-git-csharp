@@ -1,4 +1,4 @@
-namespace Helpers;
+namespace Commands;
 
 public class InitHelper()
 {

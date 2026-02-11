@@ -21,22 +21,19 @@ public class TreeHelper()
   {
     List<LsTreeRow> rows = ReadTreeRowsFromHash(hash);
 
-    return string.Join(
-      '\n',
-      rows
-        .OrderBy(x => x.Name)
-        .Select(x => $"{x.Mode} {x.ModeName} {x.Hash} \t {x.Name}"));
+    return FormatTreeRows(rows, x => $"{x.Mode} {x.ModeName} {x.Hash} \t {x.Name}");
   }
 
   public static string ListTreeNameOnly(string hash)
   {
     List<LsTreeRow> rows = ReadTreeRowsFromHash(hash);
 
-    return string.Join(
-      '\n',
-      rows
-        .OrderBy(x => x.Name)
-        .Select(x => x.Name));
+    return FormatTreeRows(rows, x => x.Name);
+  }
+
+  private static string FormatTreeRows(List<LsTreeRow> rows, Func<LsTreeRow, string> func)
+  {
+    return string.Join('\n', rows.OrderBy(x => x.Name).Select(func));
   }
 
   public static string WriteTreeObject(string path)
