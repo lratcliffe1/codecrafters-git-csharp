@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using codecrafters_git.src.Services;
 
 namespace codecrafters_git.src.Helpers;
 
@@ -15,11 +16,11 @@ public interface ISharedUtils
   (string typeName, byte[] body) ParseObjectHeader(byte[] fullObject);
 }
 
-public class SharedUtilsService : ISharedUtils
+public class SharedUtils(IRepository repository) : ISharedUtils
 {
   public string CreateObjectPath(string hash)
   {
-    return $".git/objects/{hash[0..2]}/{hash[2..]}";
+    return repository.CreateObjectPath(hash);
   }
 
   public byte[] ReadObjectBytes(string hash)
@@ -60,7 +61,7 @@ public class SharedUtilsService : ISharedUtils
   public string CreateObjectHash(byte[] data)
   {
     byte[] hashBytes = SHA1.HashData(data);
-    return Convert.ToHexString(hashBytes).ToLower();
+    return Convert.ToHexString(hashBytes).ToLowerInvariant();
   }
 
   public void SaveObjectContent(byte[] data, string path)

@@ -22,7 +22,7 @@ public interface ITreeHelper
 /// <mode> <name>\0<20_byte_sha>
 /// <mode> <name>\0<20_byte_sha>
 /// </summary>
-public class TreeService(ISharedUtils sharedUtils, IBlobHelper blobHelper, IGitObjectWriter gitObjectWriter) : ITreeHelper
+public class TreeHelper(ISharedUtils sharedUtils, IBlobHelper blobHelper, IGitObjectWriter gitObjectWriter) : ITreeHelper
 {
   private const string DirectoryMode = "40000";
   private const string FileMode = "100644";

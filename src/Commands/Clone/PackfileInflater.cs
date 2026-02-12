@@ -59,11 +59,11 @@ public static class PackfileInflater
       : new DeflateStream(countingStream, CompressionMode.Decompress, leaveOpen: true);
 
     using var outputBuffer = new MemoryStream();
-    bool deltaComplete = false;
+    var progressTracker = new DeltaProgressTracker();
     bool streamEnded = false;
 
-    // Read byte-by-byte, checking if we have a complete valid delta after each byte
-    while (!deltaComplete)
+    // Read byte-by-byte with incremental delta parsing to avoid O(n^2) rescans.
+    while (!progressTracker.IsComplete)
     {
       int byteValue = decompressor.ReadByte();
       if (byteValue == -1)
@@ -73,9 +73,7 @@ public static class PackfileInflater
       }
 
       outputBuffer.WriteByte((byte)byteValue);
-
-      // Check if we have a complete, valid delta
-      deltaComplete = TryParseDeltaCompletion(outputBuffer.GetBuffer(), (int)outputBuffer.Length, out int consumedBytes) && consumedBytes == outputBuffer.Length;
+      progressTracker.Advance(outputBuffer.GetBuffer(), (int)outputBuffer.Length);
     }
 
     // Drain remaining compressed data if stream didn't end naturally
@@ -89,144 +87,129 @@ public static class PackfileInflater
     return outputBuffer.ToArray();
   }
 
-  private static bool TryParseDeltaCompletion(byte[] data, int length, out int consumedBytes)
+  private sealed class DeltaProgressTracker
   {
-    consumedBytes = 0;
-    int dataIndex = 0;
+    private int dataIndex;
+    private bool sourceSizeRead;
+    private bool targetSizeRead;
+    private long targetSize;
+    private long bytesProduced;
 
-    if (!TryReadDeltaSize(data, length, ref dataIndex, out long sourceSize))
+    public bool IsComplete { get; private set; }
+
+    public void Advance(byte[] data, int length)
     {
-      return false;
-    }
-
-    if (!TryReadDeltaSize(data, length, ref dataIndex, out long targetSize))
-    {
-      return false;
-    }
-
-    long bytesProduced = 0;
-
-    while (dataIndex < length && bytesProduced < targetSize)
-    {
-      byte command = data[dataIndex++];
-
-      if ((command & PackfileConstants.COPY_COMMAND_FLAG) != 0)
+      if (IsComplete)
       {
-        // COPY command: validate and track bytes produced
-        if (!TryValidateCopyCommand(command, data, length, ref dataIndex, out int copySize))
+        return;
+      }
+
+      if (!sourceSizeRead && !TryReadVarLenSize(data, length, ref dataIndex, out _))
+      {
+        return;
+      }
+      sourceSizeRead = true;
+
+      if (!targetSizeRead && !TryReadVarLenSize(data, length, ref dataIndex, out targetSize))
+      {
+        return;
+      }
+      targetSizeRead = true;
+
+      while (dataIndex < length && bytesProduced < targetSize)
+      {
+        int commandIndex = dataIndex;
+        byte command = data[commandIndex];
+
+        if ((command & PackfileConstants.COPY_COMMAND_FLAG) != 0)
         {
-          return false;
+          if (!TryConsumeCopyCommand(data, length, commandIndex, out int nextIndex, out int copySize))
+          {
+            return;
+          }
+
+          dataIndex = nextIndex;
+          bytesProduced += copySize;
         }
-        bytesProduced += copySize;
-      }
-      else
-      {
-        // ADD command: validate and track bytes produced
-        if (!TryValidateAddCommand(command, data, length, ref dataIndex, out int addSize))
+        else
         {
-          return false;
+          if (!TryConsumeAddCommand(data, length, commandIndex, out int nextIndex, out int addSize))
+          {
+            return;
+          }
+
+          dataIndex = nextIndex;
+          bytesProduced += addSize;
         }
-        bytesProduced += addSize;
       }
+
+      IsComplete = bytesProduced == targetSize;
     }
 
-    // Verify we produced exactly the target size
-    if (bytesProduced != targetSize)
+    private static bool TryReadVarLenSize(byte[] data, int length, ref int index, out long size)
     {
-      return false;
-    }
+      size = 0;
+      int bitShift = 0;
+      int cursor = index;
 
-    consumedBytes = dataIndex;
-    return true;
-  }
-
-  private static bool TryValidateCopyCommand(byte command, byte[] data, int length, ref int index, out int copySize)
-  {
-    copySize = 0;
-    int copyOffset = 0;
-
-    // Read copy offset bytes
-    if ((command & PackfileConstants.COPY_OFFSET_BYTE_0) != 0)
-    {
-      if (index >= length) return false;
-      copyOffset |= data[index++];
-    }
-    if ((command & PackfileConstants.COPY_OFFSET_BYTE_1) != 0)
-    {
-      if (index >= length) return false;
-      copyOffset |= data[index++] << 8;
-    }
-    if ((command & PackfileConstants.COPY_OFFSET_BYTE_2) != 0)
-    {
-      if (index >= length) return false;
-      copyOffset |= data[index++] << 16;
-    }
-    if ((command & PackfileConstants.COPY_OFFSET_BYTE_3) != 0)
-    {
-      if (index >= length) return false;
-      copyOffset |= data[index++] << 24;
-    }
-
-    // Read copy size bytes
-    if ((command & PackfileConstants.COPY_SIZE_BYTE_0) != 0)
-    {
-      if (index >= length) return false;
-      copySize |= data[index++];
-    }
-    if ((command & PackfileConstants.COPY_SIZE_BYTE_1) != 0)
-    {
-      if (index >= length) return false;
-      copySize |= data[index++] << 8;
-    }
-    if ((command & PackfileConstants.COPY_SIZE_BYTE_2) != 0)
-    {
-      if (index >= length) return false;
-      copySize |= data[index++] << 16;
-    }
-
-    // Size 0 means copy 64KB (Git's special case)
-    if (copySize == 0)
-    {
-      copySize = PackfileConstants.DEFAULT_COPY_SIZE;
-    }
-
-    return true;
-  }
-
-  private static bool TryValidateAddCommand(byte command, byte[] data, int length, ref int index, out int addSize)
-  {
-    addSize = command & PackfileConstants.ADD_SIZE_MASK;
-
-    if (index + addSize > length)
-    {
-      return false;
-    }
-
-    // Skip the add data (we're just validating, not reading it)
-    index += addSize;
-    return true;
-  }
-
-  private static bool TryReadDeltaSize(byte[] data, int length, ref int index, out long size)
-  {
-    size = 0;
-    int bitShift = 0;
-
-    while (index < length)
-    {
-      byte currentByte = data[index++];
-      size |= (long)(currentByte & PackfileConstants.VAR_LEN_VALUE_MASK) << bitShift;
-
-      // If bit 7 is not set, this is the last byte
-      if ((currentByte & PackfileConstants.VAR_LEN_CONTINUATION_FLAG) == 0)
+      while (cursor < length)
       {
-        return true;
+        byte currentByte = data[cursor++];
+        size |= (long)(currentByte & PackfileConstants.VAR_LEN_VALUE_MASK) << bitShift;
+
+        if ((currentByte & PackfileConstants.VAR_LEN_CONTINUATION_FLAG) == 0)
+        {
+          index = cursor;
+          return true;
+        }
+
+        bitShift += 7;
       }
 
-      bitShift += 7;
+      return false;
     }
 
-    return false;
+    private static bool TryConsumeCopyCommand(byte[] data, int length, int commandIndex, out int nextIndex, out int copySize)
+    {
+      nextIndex = commandIndex;
+      copySize = 0;
+      byte command = data[commandIndex];
+      int cursor = commandIndex + 1;
+
+      // Consume offset bytes
+      if ((command & PackfileConstants.COPY_OFFSET_BYTE_0) != 0) { if (cursor >= length) return false; cursor++; }
+      if ((command & PackfileConstants.COPY_OFFSET_BYTE_1) != 0) { if (cursor >= length) return false; cursor++; }
+      if ((command & PackfileConstants.COPY_OFFSET_BYTE_2) != 0) { if (cursor >= length) return false; cursor++; }
+      if ((command & PackfileConstants.COPY_OFFSET_BYTE_3) != 0) { if (cursor >= length) return false; cursor++; }
+
+      // Consume size bytes
+      if ((command & PackfileConstants.COPY_SIZE_BYTE_0) != 0) { if (cursor >= length) return false; copySize |= data[cursor++]; }
+      if ((command & PackfileConstants.COPY_SIZE_BYTE_1) != 0) { if (cursor >= length) return false; copySize |= data[cursor++] << 8; }
+      if ((command & PackfileConstants.COPY_SIZE_BYTE_2) != 0) { if (cursor >= length) return false; copySize |= data[cursor++] << 16; }
+
+      if (copySize == 0)
+      {
+        copySize = PackfileConstants.DEFAULT_COPY_SIZE;
+      }
+
+      nextIndex = cursor;
+      return true;
+    }
+
+    private static bool TryConsumeAddCommand(byte[] data, int length, int commandIndex, out int nextIndex, out int addSize)
+    {
+      nextIndex = commandIndex;
+      addSize = data[commandIndex] & PackfileConstants.ADD_SIZE_MASK;
+      int commandLength = 1 + addSize;
+
+      if (commandIndex + commandLength > length)
+      {
+        return false;
+      }
+
+      nextIndex = commandIndex + commandLength;
+      return true;
+    }
   }
 
   /// <summary>

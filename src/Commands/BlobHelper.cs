@@ -13,7 +13,7 @@ public interface IBlobHelper
 /// <summary>
 /// blob <size>\0<content>
 /// </summary>
-public class BlobService(ISharedUtils sharedUtils, IGitObjectWriter gitObjectWriter) : IBlobHelper
+public class BlobHelper(ISharedUtils sharedUtils, IGitObjectWriter gitObjectWriter) : IBlobHelper
 {
   public string ReadBlobContent(string hash)
   {

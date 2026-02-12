@@ -5,33 +5,29 @@ namespace codecrafters_git.src.Commands.Clone;
 
 public interface IPackfileParser
 {
-  byte[] RemovePackHeader(byte[] rawData);
-  void ParseAllObjects(byte[] rawData);
+  int FindPackOffset(byte[] rawData);
+  void ParseAllObjects(byte[] rawData, int packOffset);
 }
 
 public class PackfileParser(IObjectStore objectStore) : IPackfileParser
 {
-  public byte[] RemovePackHeader(byte[] rawData)
+  public int FindPackOffset(byte[] rawData)
   {
-    int rawPackOffset = FindPattern(rawData, Encoding.ASCII.GetBytes("PACK"));
-    return rawData[rawPackOffset..];
-  }
+    var pattern = Encoding.ASCII.GetBytes("PACK");
 
-  private static int FindPattern(byte[] data, byte[] pattern)
-  {
-    for (int i = 0; i <= data.Length - pattern.Length; i++)
+    for (int i = 0; i <= rawData.Length - pattern.Length; i++)
     {
       bool match = true;
       for (int j = 0; j < pattern.Length; j++)
       {
-        if (data[i + j] != pattern[j]) { match = false; break; }
+        if (rawData[i + j] != pattern[j]) { match = false; break; }
       }
       if (match) return i;
     }
     return -1;
   }
 
-  public void ParseAllObjects(byte[] rawData)
+  public void ParseAllObjects(byte[] rawData, int packOffset)
   {
     // Track objects by their offset in the packfile for OffsetDelta resolution
     var objectsByOffset = new Dictionary<int, GitObject>();
@@ -41,8 +37,8 @@ public class PackfileParser(IObjectStore objectStore) : IPackfileParser
     var pendingOffsetDeltas = new List<PendingOffsetDelta>();
 
     // Read object count from packfile header (bytes 8-11)
-    int objectCount = NetToHostInt32(rawData, PackfileConstants.OBJECT_COUNT_OFFSET);
-    int offset = PackfileConstants.OBJECT_DATA_START_OFFSET;
+    int objectCount = NetToHostInt32(rawData, packOffset + PackfileConstants.OBJECT_COUNT_OFFSET);
+    int offset = packOffset + PackfileConstants.OBJECT_DATA_START_OFFSET;
 
     for (int i = 0; i < objectCount; i++)
     {
@@ -63,26 +59,16 @@ public class PackfileParser(IObjectStore objectStore) : IPackfileParser
 
       if (type == (int)GitType.RefDelta) // RefDelta: base object referenced by SHA-1 hash
       {
-        string? refBaseHash = ReadRefDeltaBaseHash(rawData, ref offset);
-        objectData = PackfileInflater.InflateDeltaObject(rawData, offset, out bytesConsumed);
-
-        TryResolveRefDelta(refBaseHash, objectData, objectStartOffset, objectsByOffset, pendingRefDeltas);
+        HandleRefDeltaObject(rawData, objectStartOffset, objectsByOffset, pendingRefDeltas, out bytesConsumed, ref offset);
       }
       else if (type == (int)GitType.OffsetDelta) // OffsetDelta: base object referenced by backward distance in packfile
       {
-        int offsetAfterHeader = offset;
-        int backwardDistance = ReadOffsetDeltaDistance(rawData, ref offset);
-        int? baseOffset = objectStartOffset - backwardDistance;
-        int? baseOffsetAlt = offsetAfterHeader - backwardDistance;
-        objectData = PackfileInflater.InflateDeltaObject(rawData, offset, out bytesConsumed);
-
-        TryResolveOffsetDelta(baseOffset, baseOffsetAlt, objectData, objectStartOffset, objectsByOffset, pendingOffsetDeltas);
+        HandleOffsetDeltaObject(rawData, objectStartOffset, objectsByOffset, pendingOffsetDeltas, out bytesConsumed, ref offset);
       }
       else // Standard object (Commit, Tree, Blob, Tag): full object data
       {
         objectData = PackfileInflater.InflateStandardObject(rawData, offset, uncompressedSize, out bytesConsumed);
-
-        StoreStandardObject(type, objectData, objectStartOffset, objectsByOffset);
+        StoreResolvedObject(type, objectData, objectStartOffset, objectsByOffset);
       }
 
       offset += bytesConsumed;
@@ -114,33 +100,52 @@ public class PackfileParser(IObjectStore objectStore) : IPackfileParser
     return (type, uncompressedSize);
   }
 
-  private void StoreStandardObject(
-    int type,
-    byte[] objectData,
+  private void HandleRefDeltaObject(
+    byte[] rawData,
     int objectStartOffset,
-    Dictionary<int, GitObject> objectsByOffset)
+    Dictionary<int, GitObject> objectsByOffset,
+    List<PendingRefDelta> pendingRefDeltas,
+    out int bytesConsumed,
+    ref int parserOffset)
   {
-    objectStore.StoreObject(type, objectData);
-    objectsByOffset[objectStartOffset] = new GitObject(type, objectData);
+    string refBaseHash = ReadRefDeltaBaseHash(rawData, ref parserOffset);
+    byte[] objectData = PackfileInflater.InflateDeltaObject(rawData, parserOffset, out bytesConsumed);
+
+    TryResolveRefDelta(refBaseHash, objectData, objectStartOffset, objectsByOffset, pendingRefDeltas);
+  }
+
+  private void HandleOffsetDeltaObject(
+    byte[] rawData,
+    int objectStartOffset,
+    Dictionary<int, GitObject> objectsByOffset,
+    List<PendingOffsetDelta> pendingOffsetDeltas,
+    out int bytesConsumed,
+    ref int parserOffset)
+  {
+    int offsetAfterHeader = parserOffset;
+    int backwardDistance = ReadOffsetDeltaDistance(rawData, ref parserOffset);
+    int? baseOffset = objectStartOffset - backwardDistance;
+    int? baseOffsetAlt = offsetAfterHeader - backwardDistance;
+    byte[] objectData = PackfileInflater.InflateDeltaObject(rawData, parserOffset, out bytesConsumed);
+
+    TryResolveOffsetDelta(baseOffset, baseOffsetAlt, objectData, objectStartOffset, objectsByOffset, pendingOffsetDeltas);
   }
 
   private void TryResolveRefDelta(
-    string? refBaseHash,
+    string refBaseHash,
     byte[] deltaData,
     int objectStartOffset,
     Dictionary<int, GitObject> objectsByOffset,
     List<PendingRefDelta> pendingRefDeltas)
   {
-    if (refBaseHash != null && DeltaResolver.TryApplyRefDelta(objectStore, refBaseHash, deltaData, out int baseType, out byte[] resolved))
+    if (DeltaResolver.TryApplyRefDelta(objectStore, refBaseHash, deltaData, out int baseType, out byte[] resolved))
     {
-      // Successfully resolved: store the resolved object
-      objectStore.StoreObject(baseType, resolved);
-      objectsByOffset[objectStartOffset] = new GitObject(baseType, resolved);
+      StoreResolvedObject(baseType, resolved, objectStartOffset, objectsByOffset);
     }
     else
     {
       // Base object not available yet: add to pending list for later resolution
-      pendingRefDeltas.Add(new PendingRefDelta(refBaseHash ?? string.Empty, deltaData, objectStartOffset));
+      pendingRefDeltas.Add(new PendingRefDelta(refBaseHash, deltaData, objectStartOffset));
     }
   }
 
@@ -154,9 +159,7 @@ public class PackfileParser(IObjectStore objectStore) : IPackfileParser
   {
     if (DeltaResolver.TryApplyOffsetDelta(objectsByOffset, baseOffset, baseOffsetAlt, deltaData, out int baseType, out byte[] resolved))
     {
-      // Successfully resolved: store the resolved object
-      objectStore.StoreObject(baseType, resolved);
-      objectsByOffset[objectStartOffset] = new GitObject(baseType, resolved);
+      StoreResolvedObject(baseType, resolved, objectStartOffset, objectsByOffset);
     }
     else if (baseOffset.HasValue)
     {
@@ -168,8 +171,10 @@ public class PackfileParser(IObjectStore objectStore) : IPackfileParser
 
   private static int NetToHostInt32(byte[] data, int startIndex)
   {
-    var bytes = data.Skip(startIndex).Take(4).Reverse().ToArray();
-    return BitConverter.ToInt32(bytes, 0);
+    return (data[startIndex] << 24)
+      | (data[startIndex + 1] << 16)
+      | (data[startIndex + 2] << 8)
+      | data[startIndex + 3];
   }
 
   private static string ReadRefDeltaBaseHash(byte[] data, ref int index)
@@ -181,7 +186,7 @@ public class PackfileParser(IObjectStore objectStore) : IPackfileParser
 
     byte[] hashBytes = data[index..(index + PackfileConstants.SHA1_HASH_SIZE)];
     index += PackfileConstants.SHA1_HASH_SIZE;
-    return Convert.ToHexString(hashBytes).ToLower();
+    return Convert.ToHexString(hashBytes).ToLowerInvariant();
   }
 
   private static int ReadOffsetDeltaDistance(byte[] data, ref int index)
@@ -210,32 +215,77 @@ public class PackfileParser(IObjectStore objectStore) : IPackfileParser
     while (madeProgress && (pendingRefDeltas.Count > 0 || pendingOffsetDeltas.Count > 0))
     {
       madeProgress = false;
-
-      // Try to resolve pending RefDeltas (iterate backwards to safely remove items)
-      for (int i = pendingRefDeltas.Count - 1; i >= 0; i--)
-      {
-        PendingRefDelta pending = pendingRefDeltas[i];
-        if (DeltaResolver.TryApplyRefDelta(objectStore, pending.BaseHash, pending.DeltaData, out int baseType, out byte[] resolved))
-        {
-          objectStore.StoreObject(baseType, resolved);
-          objectsByOffset[pending.ObjectOffset] = new GitObject(baseType, resolved);
-          pendingRefDeltas.RemoveAt(i);
-          madeProgress = true;
-        }
-      }
-
-      // Try to resolve pending OffsetDeltas (iterate backwards to safely remove items)
-      for (int i = pendingOffsetDeltas.Count - 1; i >= 0; i--)
-      {
-        PendingOffsetDelta pending = pendingOffsetDeltas[i];
-        if (DeltaResolver.TryApplyOffsetDelta(objectsByOffset, pending.BaseOffset, pending.BaseOffsetAlt, pending.DeltaData, out int baseType, out byte[] resolved))
-        {
-          objectStore.StoreObject(baseType, resolved);
-          objectsByOffset[pending.ObjectOffset] = new GitObject(baseType, resolved);
-          pendingOffsetDeltas.RemoveAt(i);
-          madeProgress = true;
-        }
-      }
+      madeProgress |= TryResolvePendingRefDeltas(objectsByOffset, pendingRefDeltas);
+      madeProgress |= TryResolvePendingOffsetDeltas(objectsByOffset, pendingOffsetDeltas);
     }
   }
+
+  private bool TryResolvePendingRefDeltas(
+    Dictionary<int, GitObject> objectsByOffset,
+    List<PendingRefDelta> pendingRefDeltas)
+  {
+    return TryResolvePending(
+      pendingRefDeltas,
+      pending => DeltaResolver.TryApplyRefDelta(objectStore, pending.BaseHash, pending.DeltaData, out int baseType, out byte[] resolved)
+        ? new ResolvedDelta(baseType, resolved, pending.ObjectOffset)
+        : null,
+      objectsByOffset);
+  }
+
+  private bool TryResolvePendingOffsetDeltas(
+    Dictionary<int, GitObject> objectsByOffset,
+    List<PendingOffsetDelta> pendingOffsetDeltas)
+  {
+    return TryResolvePending(
+      pendingOffsetDeltas,
+      pending => DeltaResolver.TryApplyOffsetDelta(objectsByOffset, pending.BaseOffset, pending.BaseOffsetAlt, pending.DeltaData, out int baseType, out byte[] resolved)
+        ? new ResolvedDelta(baseType, resolved, pending.ObjectOffset)
+        : null,
+      objectsByOffset);
+  }
+
+  private bool TryResolvePending<TPending>(
+    List<TPending> pendingList,
+    Func<TPending, ResolvedDelta?> tryResolve,
+    Dictionary<int, GitObject> objectsByOffset)
+  {
+    bool madeProgress = false;
+
+    for (int i = pendingList.Count - 1; i >= 0; i--)
+    {
+      ResolvedDelta? resolved = tryResolve(pendingList[i]);
+      if (!resolved.HasValue)
+      {
+        continue;
+      }
+
+      StoreResolvedObject(resolved.Value.Type, resolved.Value.Data, resolved.Value.Offset, objectsByOffset);
+      RemoveBySwapWithLast(pendingList, i);
+      madeProgress = true;
+    }
+
+    return madeProgress;
+  }
+
+  private void StoreResolvedObject(
+    int objectType,
+    byte[] objectData,
+    int objectStartOffset,
+    Dictionary<int, GitObject> objectsByOffset)
+  {
+    objectStore.StoreObject(objectType, objectData);
+    objectsByOffset[objectStartOffset] = new GitObject(objectType, objectData);
+  }
+
+  private static void RemoveBySwapWithLast<T>(List<T> list, int index)
+  {
+    int lastIndex = list.Count - 1;
+    if (index != lastIndex)
+    {
+      list[index] = list[lastIndex];
+    }
+    list.RemoveAt(lastIndex);
+  }
+
+  private readonly record struct ResolvedDelta(int Type, byte[] Data, int Offset);
 }

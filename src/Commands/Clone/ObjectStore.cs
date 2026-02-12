@@ -6,16 +6,15 @@ namespace codecrafters_git.src.Commands.Clone;
 
 public interface IObjectStore
 {
-  Dictionary<string, GitObject> ObjectsByHash { get; }
   void StoreObject(int type, byte[] data);
   bool TryGetObjectByHash(string hash, out GitObject obj);
 }
 
-public class ObjectStore(ISharedUtils sharedUtils, IGitObjectWriter gitObjectWriter) : IObjectStore
+public class ObjectStore(
+  ISharedUtils sharedUtils,
+  IGitObjectWriter gitObjectWriter) : IObjectStore
 {
   private readonly Dictionary<string, GitObject> objectsByHash = [];
-
-  public Dictionary<string, GitObject> ObjectsByHash => objectsByHash;
 
   public void StoreObject(int type, byte[] data)
   {

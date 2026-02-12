@@ -1,3 +1,5 @@
+using codecrafters_git.src.Services;
+
 namespace codecrafters_git.src.Commands;
 
 public interface IInitHelper
@@ -5,15 +7,22 @@ public interface IInitHelper
   string Init(string? directory = null);
 }
 
-public class InitService : IInitHelper
+public class InitHelper(
+  IRepository repository,
+  IGitRefHelper gitRefHelper) : IInitHelper
 {
   public string Init(string? directory = null)
   {
-    Directory.CreateDirectory($"{directory}.git");
-    Directory.CreateDirectory($"{directory}.git/objects");
-    Directory.CreateDirectory($"{directory}.git/refs");
-    File.WriteAllText($"{directory}.git/HEAD", "ref: refs/heads/main\n");
+    if (!string.IsNullOrWhiteSpace(directory))
+    {
+      repository.UseRepositoryRoot(directory);
+    }
 
-    return $"Initialized git directory: {directory}";
+    Directory.CreateDirectory(repository.GitDirectory);
+    Directory.CreateDirectory(repository.ObjectsDirectory);
+    Directory.CreateDirectory(repository.ResolveRefPath("refs"));
+    gitRefHelper.WriteHead("refs/heads/main");
+
+    return $"Initialized git directory: {repository.GitDirectory}";
   }
 }

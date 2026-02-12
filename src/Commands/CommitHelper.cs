@@ -16,7 +16,7 @@ public interface ICommitHelper
 ///
 /// <commit message>
 /// </summary>
-public class CommitService(IGitObjectWriter gitObjectWriter) : ICommitHelper
+public class CommitHelper(IGitObjectWriter gitObjectWriter) : ICommitHelper
 {
   public string Commit(string treeHash, string parentHash, string message)
   {

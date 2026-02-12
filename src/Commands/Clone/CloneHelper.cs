@@ -7,39 +7,34 @@ public interface ICloneHelper
   Task<string> Clone(string repositoryUrl, string targetDirectory);
 }
 
-public class CloneService(
+public class CloneHelper(
   IGitProtocolClient gitProtocolClient,
   IObjectStore objectStore,
   IPackfileParser packfileParser,
   ITreeHelper treeHelper,
   IInitHelper initHelper,
+  IRepository repository,
   IGitRefHelper gitRefHelper) : ICloneHelper
 {
   public async Task<string> Clone(string repositoryUrl, string targetDirectory)
   {
-    initHelper.Init(targetDirectory + "/");
+    string workTreeRoot = Path.GetFullPath(Path.Combine(repository.WorkTreeRoot, targetDirectory));
+    repository.UseRepositoryRoot(workTreeRoot);
+
+    initHelper.Init(workTreeRoot);
 
     (string headCommitSha, string headRef) = await gitProtocolClient.DiscoverReferences(repositoryUrl);
     byte[] packfileData = await gitProtocolClient.FetchPackfile(repositoryUrl, headCommitSha);
 
-    string originalWorkingDirectory = Directory.GetCurrentDirectory();
-    string workTreeRoot = Path.Combine(originalWorkingDirectory, targetDirectory);
-    Directory.SetCurrentDirectory(targetDirectory);
+    int packOffset = packfileParser.FindPackOffset(packfileData);
+    packfileParser.ParseAllObjects(packfileData, packOffset);
 
-    try
-    {
-      byte[] packfileWithoutHeader = packfileParser.RemovePackHeader(packfileData);
-      packfileParser.ParseAllObjects(packfileWithoutHeader);
+    gitRefHelper.WriteHead(headRef);
+    gitRefHelper.WriteRef(headRef, headCommitSha);
 
-      gitRefHelper.WriteHead(headRef);
-      gitRefHelper.WriteRef(headRef, headCommitSha);
+    treeHelper.CheckoutWorkingTree(objectStore, workTreeRoot, headCommitSha);
 
-      treeHelper.CheckoutWorkingTree(objectStore, workTreeRoot, headCommitSha);
-    }
-    finally
-    {
-      Directory.SetCurrentDirectory(originalWorkingDirectory);
-    }
+    repository.UseRepositoryRoot(repository.WorkTreeRoot);
 
     return "";
   }
