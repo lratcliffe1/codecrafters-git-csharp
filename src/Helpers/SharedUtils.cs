@@ -2,28 +2,39 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Helpers;
+namespace codecrafters_git.src.Helpers;
 
-public class SharedUtils()
+public interface ISharedUtils
 {
-  public static string CreateBlobPath(string hash)
+  string CreateObjectPath(string hash);
+  byte[] ReadObjectBytes(string hash);
+  string ReadObjectString(string hash);
+  byte[] AddHeaderString(byte[] contents, string type, string? extraContent = "");
+  string CreateObjectHash(byte[] data);
+  void SaveObjectContent(byte[] data, string path);
+  (string typeName, byte[] body) ParseObjectHeader(byte[] fullObject);
+}
+
+public class SharedUtilsService : ISharedUtils
+{
+  public string CreateObjectPath(string hash)
   {
     return $".git/objects/{hash[0..2]}/{hash[2..]}";
   }
 
-  public static byte[] ReadObjectBytes(string hash)
+  public byte[] ReadObjectBytes(string hash)
   {
-    string path = CreateBlobPath(hash);
+    string path = CreateObjectPath(hash);
     return ReadZLibFileToBytes(path);
   }
 
-  public static string ReadObjectString(string hash)
+  public string ReadObjectString(string hash)
   {
-    string path = CreateBlobPath(hash);
+    string path = CreateObjectPath(hash);
     return ReadZLibFileToString(path);
   }
 
-  public static byte[] ReadZLibFileToBytes(string path)
+  private static byte[] ReadZLibFileToBytes(string path)
   {
     using var fileStream = File.OpenRead(path);
     using var zlibStream = new ZLibStream(fileStream, CompressionMode.Decompress);
@@ -32,13 +43,13 @@ public class SharedUtils()
     return result.ToArray();
   }
 
-  public static string ReadZLibFileToString(string path)
+  private static string ReadZLibFileToString(string path)
   {
     byte[] decompressedBytes = ReadZLibFileToBytes(path);
     return Encoding.UTF8.GetString(decompressedBytes);
   }
 
-  public static byte[] AddHeaderString(byte[] contents, string type, string? extraContent = "")
+  public byte[] AddHeaderString(byte[] contents, string type, string? extraContent = "")
   {
     string headerString = $"{type} {contents.Length}\0{extraContent}";
     byte[] header = Encoding.UTF8.GetBytes(headerString);
@@ -46,13 +57,13 @@ public class SharedUtils()
     return header.Concat(contents).ToArray();
   }
 
-  public static string CreateBlobHash(byte[] data)
+  public string CreateObjectHash(byte[] data)
   {
     byte[] hashBytes = SHA1.HashData(data);
     return Convert.ToHexString(hashBytes).ToLower();
   }
 
-  public static void SaveBlobContent(byte[] data, string path)
+  public void SaveObjectContent(byte[] data, string path)
   {
     byte[] compressed = ZlibCompress(data);
 
@@ -63,7 +74,7 @@ public class SharedUtils()
     File.WriteAllBytes(path, compressed);
   }
 
-  static byte[] ZlibCompress(byte[] input)
+  private static byte[] ZlibCompress(byte[] input)
   {
     using var outputStream = new MemoryStream();
     using (var zLibStream = new ZLibStream(outputStream, CompressionLevel.Optimal))
@@ -71,5 +82,21 @@ public class SharedUtils()
       zLibStream.Write(input, 0, input.Length);
     }
     return outputStream.ToArray();
+  }
+
+  public (string typeName, byte[] body) ParseObjectHeader(byte[] fullObject)
+  {
+    int spaceIndex = Array.IndexOf(fullObject, (byte)' ');
+    int nullIndex = Array.IndexOf(fullObject, (byte)0, spaceIndex + 1);
+
+    if (spaceIndex < 0 || nullIndex < 0)
+    {
+      throw new InvalidDataException("Invalid object format: missing header");
+    }
+
+    string typeName = Encoding.UTF8.GetString(fullObject, 0, spaceIndex);
+    byte[] body = fullObject[(nullIndex + 1)..];
+
+    return (typeName, body);
   }
 }

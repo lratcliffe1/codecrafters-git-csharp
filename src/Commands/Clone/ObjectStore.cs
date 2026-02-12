@@ -1,9 +1,17 @@
-using System.Text;
-using Helpers;
+using codecrafters_git.src.Helpers;
+using codecrafters_git.src.Models;
+using codecrafters_git.src.Services;
 
-namespace Commands;
+namespace codecrafters_git.src.Commands.Clone;
 
-internal sealed class ObjectStore
+public interface IObjectStore
+{
+  Dictionary<string, GitObject> ObjectsByHash { get; }
+  void StoreObject(int type, byte[] data);
+  bool TryGetObjectByHash(string hash, out GitObject obj);
+}
+
+public class ObjectStore(ISharedUtils sharedUtils, IGitObjectWriter gitObjectWriter) : IObjectStore
 {
   private readonly Dictionary<string, GitObject> objectsByHash = [];
 
@@ -11,66 +19,58 @@ internal sealed class ObjectStore
 
   public void StoreObject(int type, byte[] data)
   {
-    string typeName = GetTypeName(type);
-    byte[] headered = SharedUtils.AddHeaderString(data, typeName);
-    string hash = SharedUtils.CreateBlobHash(headered);
-    string blobPath = SharedUtils.CreateBlobPath(hash);
-    SharedUtils.SaveBlobContent(headered, blobPath);
-    objectsByHash[hash] = new GitObject(type, data);
+    // Convert type enum to type name string
+    GitType gitType = (GitType)type;
+    string typeName = GitTypeConverter.GetTypeName(gitType);
+
+    // Write object to disk and get its SHA-1 hash
+    string objectHash = gitObjectWriter.WriteObject(typeName, data);
+
+    // Cache in memory for fast access
+    objectsByHash[objectHash] = new GitObject(type, data);
   }
 
   public bool TryGetObjectByHash(string hash, out GitObject obj)
   {
+    // Check memory cache first (fast path)
     if (objectsByHash.TryGetValue(hash, out obj))
     {
-      CloneLogger.Log($"Object {hash} found in memory");
       return true;
     }
 
-    string path = SharedUtils.CreateBlobPath(hash);
-    if (!File.Exists(path))
-    {
-      CloneLogger.Log($"Object {hash} not found on disk at {path}");
-      obj = default;
-      return false;
-    }
-
-    byte[] fullObject = SharedUtils.ReadObjectBytes(hash);
-    int spaceIndex = Array.IndexOf(fullObject, (byte)' ');
-    int nullIndex = Array.IndexOf(fullObject, (byte)0, spaceIndex + 1);
-    if (spaceIndex < 0 || nullIndex < 0)
+    // Fall back to disk: check if object file exists
+    string objectPath = sharedUtils.CreateObjectPath(hash);
+    if (!File.Exists(objectPath))
     {
       obj = default;
       return false;
     }
 
-    string typeName = Encoding.UTF8.GetString(fullObject, 0, spaceIndex);
-    int type = GetTypeFromName(typeName);
-    byte[] body = fullObject[(nullIndex + 1)..];
-    obj = new GitObject(type, body);
-    objectsByHash[hash] = obj;
+    // Read object from disk and parse it
+    byte[] fullObjectData = sharedUtils.ReadObjectBytes(hash);
 
-    return true;
-  }
-
-  private static int GetTypeFromName(string typeName)
-  {
-    return typeName switch
+    try
     {
-      "commit" => (int)GitType.Commit,
-      "tree" => (int)GitType.Tree,
-      "blob" => (int)GitType.Blob,
-      "tag" => (int)GitType.Tag,
-      _ => 0
-    };
-  }
+      // Parse object header to extract type and body
+      (string typeName, byte[] body) = sharedUtils.ParseObjectHeader(fullObjectData);
+      GitType gitType = GitTypeConverter.GetTypeFromName(typeName);
 
-  private static string GetTypeName(int type) => type switch
-  {
-    (int)GitType.Commit => "commit",
-    (int)GitType.Tree => "tree",
-    (int)GitType.Blob => "blob",
-    (int)GitType.Tag => "tag",
-    _ => "unknown"
-  };
+      // Create object and cache it in memory
+      obj = new GitObject((int)gitType, body);
+      objectsByHash[hash] = obj;
+      return true;
+    }
+    catch (ArgumentException)
+    {
+      // Invalid type name
+      obj = default;
+      return false;
+    }
+    catch (InvalidDataException)
+    {
+      // Invalid object format
+      obj = default;
+      return false;
+    }
+  }
 }

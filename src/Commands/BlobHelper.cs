@@ -1,31 +1,36 @@
-using Helpers;
+using codecrafters_git.src.Helpers;
+using codecrafters_git.src.Services;
 
-namespace Commands;
+namespace codecrafters_git.src.Commands;
+
+public interface IBlobHelper
+{
+  string ReadBlobContent(string hash);
+  string WriteBlobObjectFromFile(string path);
+  string WriteBlobObjectFromBytes(byte[] data);
+}
 
 /// <summary>
 /// blob <size>\0<content>
 /// </summary>
-public class BlobHelper()
+public class BlobService(ISharedUtils sharedUtils, IGitObjectWriter gitObjectWriter) : IBlobHelper
 {
-  public static string ReadBlobContent(string hash)
+  public string ReadBlobContent(string hash)
   {
-    string result = SharedUtils.ReadObjectString(hash);
+    string result = sharedUtils.ReadObjectString(hash);
 
     return ExtractBlobContent(result);
   }
 
-  public static string WriteBlobObjectFromFile(string path)
+  public string WriteBlobObjectFromFile(string path)
   {
     byte[] contents = File.ReadAllBytes(path);
+    return WriteBlobObjectFromBytes(contents);
+  }
 
-    byte[] fullBlobObject = SharedUtils.AddHeaderString(contents, "blob");
-
-    string fileHash = SharedUtils.CreateBlobHash(fullBlobObject);
-    string blobPath = SharedUtils.CreateBlobPath(fileHash);
-
-    SharedUtils.SaveBlobContent(fullBlobObject, blobPath);
-
-    return fileHash;
+  public string WriteBlobObjectFromBytes(byte[] data)
+  {
+    return gitObjectWriter.WriteObject("blob", data);
   }
 
   private static string ExtractBlobContent(string output)

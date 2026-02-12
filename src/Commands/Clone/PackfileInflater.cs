@@ -1,39 +1,41 @@
 using System.IO.Compression;
 
-namespace Commands;
+namespace codecrafters_git.src.Commands.Clone;
 
-internal sealed class PackfileInflater
+public static class PackfileInflater
 {
   public static byte[] InflateStandardObject(byte[] rawData, int offset, long uncompressedSize, out int bytesConsumed)
   {
-    using var ms = new MemoryStream(rawData, offset, rawData.Length - offset);
-    using var counting = new ThrottledCountingStream(ms, maxReadBytes: 1);
-    using var zlib = new ZLibStream(counting, CompressionMode.Decompress, leaveOpen: true);
+    using var inputStream = new MemoryStream(rawData, offset, rawData.Length - offset);
+    using var countingStream = new ThrottledCountingStream(inputStream, maxReadBytes: 1);
+    using var zlibStream = new ZLibStream(countingStream, CompressionMode.Decompress, leaveOpen: true);
 
     if (uncompressedSize > int.MaxValue)
     {
       throw new InvalidOperationException("Object too large to materialize.");
     }
 
-    int expected = (int)uncompressedSize;
-    byte[] output = new byte[expected];
+    int expectedSize = (int)uncompressedSize;
+    byte[] output = new byte[expectedSize];
     int totalRead = 0;
 
-    while (totalRead < expected)
+    // Read decompressed data
+    while (totalRead < expectedSize)
     {
-      int read = zlib.Read(output, totalRead, expected - totalRead);
-      if (read == 0)
+      int bytesRead = zlibStream.Read(output, totalRead, expectedSize - totalRead);
+      if (bytesRead == 0)
       {
         break;
       }
-      totalRead += read;
+      totalRead += bytesRead;
     }
 
+    // Drain any remaining compressed data to get accurate byte count
     byte[] drainBuffer = new byte[256];
-    while (zlib.Read(drainBuffer, 0, drainBuffer.Length) > 0) { }
+    while (zlibStream.Read(drainBuffer, 0, drainBuffer.Length) > 0) { }
 
-    bytesConsumed = (int)counting.BytesRead;
-    return totalRead == expected ? output : output.Take(totalRead).ToArray();
+    bytesConsumed = (int)countingStream.BytesRead;
+    return totalRead == expectedSize ? output : output.Take(totalRead).ToArray();
   }
 
   public static byte[] InflateDeltaObject(byte[] rawData, int offset, out int bytesConsumed)
@@ -50,184 +52,219 @@ internal sealed class PackfileInflater
 
   private static byte[] InflateDeltaWithStream(byte[] rawData, int offset, bool useZlib, out int bytesConsumed)
   {
-    using var ms = new MemoryStream(rawData, offset, rawData.Length - offset);
-    using var counting = new ThrottledCountingStream(ms, maxReadBytes: 1);
-    using Stream inflater = useZlib
-      ? new ZLibStream(counting, CompressionMode.Decompress, leaveOpen: true)
-      : new DeflateStream(counting, CompressionMode.Decompress, leaveOpen: true);
+    using var inputStream = new MemoryStream(rawData, offset, rawData.Length - offset);
+    using var countingStream = new ThrottledCountingStream(inputStream, maxReadBytes: 1);
+    using Stream decompressor = useZlib
+      ? new ZLibStream(countingStream, CompressionMode.Decompress, leaveOpen: true)
+      : new DeflateStream(countingStream, CompressionMode.Decompress, leaveOpen: true);
 
-    using var output = new MemoryStream();
-    bool complete = false;
-    bool ended = false;
+    using var outputBuffer = new MemoryStream();
+    bool deltaComplete = false;
+    bool streamEnded = false;
 
-    while (!complete)
+    // Read byte-by-byte, checking if we have a complete valid delta after each byte
+    while (!deltaComplete)
     {
-      int value = inflater.ReadByte();
-      if (value == -1)
+      int byteValue = decompressor.ReadByte();
+      if (byteValue == -1)
       {
-        ended = true;
+        streamEnded = true;
         break;
       }
 
-      output.WriteByte((byte)value);
-      complete = TryParseDeltaCompletion(output.GetBuffer(), (int)output.Length, out int consumedBytes) &&
-                 consumedBytes == output.Length;
+      outputBuffer.WriteByte((byte)byteValue);
+
+      // Check if we have a complete, valid delta
+      deltaComplete = TryParseDeltaCompletion(outputBuffer.GetBuffer(), (int)outputBuffer.Length, out int consumedBytes) && consumedBytes == outputBuffer.Length;
     }
 
-    if (!ended)
+    // Drain remaining compressed data if stream didn't end naturally
+    if (!streamEnded)
     {
       byte[] drainBuffer = new byte[256];
-      while (inflater.Read(drainBuffer, 0, drainBuffer.Length) > 0) { }
+      while (decompressor.Read(drainBuffer, 0, drainBuffer.Length) > 0) { }
     }
 
-    bytesConsumed = (int)counting.BytesRead;
-    return output.ToArray();
+    bytesConsumed = (int)countingStream.BytesRead;
+    return outputBuffer.ToArray();
   }
 
   private static bool TryParseDeltaCompletion(byte[] data, int length, out int consumedBytes)
   {
     consumedBytes = 0;
-    int index = 0;
+    int dataIndex = 0;
 
-    if (!TryReadDeltaSize(data, length, ref index, out long _))
-    {
-      return false;
-    }
-    if (!TryReadDeltaSize(data, length, ref index, out long targetSize))
+    if (!TryReadDeltaSize(data, length, ref dataIndex, out long sourceSize))
     {
       return false;
     }
 
-    long produced = 0;
-    while (index < length && produced < targetSize)
+    if (!TryReadDeltaSize(data, length, ref dataIndex, out long targetSize))
     {
-      byte cmd = data[index++];
-      if ((cmd & 0x80) != 0)
+      return false;
+    }
+
+    long bytesProduced = 0;
+
+    while (dataIndex < length && bytesProduced < targetSize)
+    {
+      byte command = data[dataIndex++];
+
+      if ((command & PackfileConstants.COPY_COMMAND_FLAG) != 0)
       {
-        int copyOffset = 0;
-        int copySize = 0;
-
-        if ((cmd & 0x01) != 0)
-        {
-          if (index >= length) return false;
-          copyOffset |= data[index++];
-        }
-        if ((cmd & 0x02) != 0)
-        {
-          if (index >= length) return false;
-          copyOffset |= data[index++] << 8;
-        }
-        if ((cmd & 0x04) != 0)
-        {
-          if (index >= length) return false;
-          copyOffset |= data[index++] << 16;
-        }
-        if ((cmd & 0x08) != 0)
-        {
-          if (index >= length) return false;
-          copyOffset |= data[index++] << 24;
-        }
-
-        if ((cmd & 0x10) != 0)
-        {
-          if (index >= length) return false;
-          copySize |= data[index++];
-        }
-        if ((cmd & 0x20) != 0)
-        {
-          if (index >= length) return false;
-          copySize |= data[index++] << 8;
-        }
-        if ((cmd & 0x40) != 0)
-        {
-          if (index >= length) return false;
-          copySize |= data[index++] << 16;
-        }
-
-        if (copySize == 0)
-        {
-          copySize = 0x10000;
-        }
-
-        produced += copySize;
-      }
-      else
-      {
-        int addSize = cmd & 0x7F;
-        if (index + addSize > length)
+        // COPY command: validate and track bytes produced
+        if (!TryValidateCopyCommand(command, data, length, ref dataIndex, out int copySize))
         {
           return false;
         }
-        index += addSize;
-        produced += addSize;
+        bytesProduced += copySize;
+      }
+      else
+      {
+        // ADD command: validate and track bytes produced
+        if (!TryValidateAddCommand(command, data, length, ref dataIndex, out int addSize))
+        {
+          return false;
+        }
+        bytesProduced += addSize;
       }
     }
 
-    if (produced != targetSize)
+    // Verify we produced exactly the target size
+    if (bytesProduced != targetSize)
     {
       return false;
     }
 
-    consumedBytes = index;
+    consumedBytes = dataIndex;
+    return true;
+  }
+
+  private static bool TryValidateCopyCommand(byte command, byte[] data, int length, ref int index, out int copySize)
+  {
+    copySize = 0;
+    int copyOffset = 0;
+
+    // Read copy offset bytes
+    if ((command & PackfileConstants.COPY_OFFSET_BYTE_0) != 0)
+    {
+      if (index >= length) return false;
+      copyOffset |= data[index++];
+    }
+    if ((command & PackfileConstants.COPY_OFFSET_BYTE_1) != 0)
+    {
+      if (index >= length) return false;
+      copyOffset |= data[index++] << 8;
+    }
+    if ((command & PackfileConstants.COPY_OFFSET_BYTE_2) != 0)
+    {
+      if (index >= length) return false;
+      copyOffset |= data[index++] << 16;
+    }
+    if ((command & PackfileConstants.COPY_OFFSET_BYTE_3) != 0)
+    {
+      if (index >= length) return false;
+      copyOffset |= data[index++] << 24;
+    }
+
+    // Read copy size bytes
+    if ((command & PackfileConstants.COPY_SIZE_BYTE_0) != 0)
+    {
+      if (index >= length) return false;
+      copySize |= data[index++];
+    }
+    if ((command & PackfileConstants.COPY_SIZE_BYTE_1) != 0)
+    {
+      if (index >= length) return false;
+      copySize |= data[index++] << 8;
+    }
+    if ((command & PackfileConstants.COPY_SIZE_BYTE_2) != 0)
+    {
+      if (index >= length) return false;
+      copySize |= data[index++] << 16;
+    }
+
+    // Size 0 means copy 64KB (Git's special case)
+    if (copySize == 0)
+    {
+      copySize = PackfileConstants.DEFAULT_COPY_SIZE;
+    }
+
+    return true;
+  }
+
+  private static bool TryValidateAddCommand(byte command, byte[] data, int length, ref int index, out int addSize)
+  {
+    addSize = command & PackfileConstants.ADD_SIZE_MASK;
+
+    if (index + addSize > length)
+    {
+      return false;
+    }
+
+    // Skip the add data (we're just validating, not reading it)
+    index += addSize;
     return true;
   }
 
   private static bool TryReadDeltaSize(byte[] data, int length, ref int index, out long size)
   {
     size = 0;
-    int shift = 0;
+    int bitShift = 0;
+
     while (index < length)
     {
-      byte b = data[index++];
-      size |= (long)(b & 0x7F) << shift;
-      if ((b & 0x80) == 0)
+      byte currentByte = data[index++];
+      size |= (long)(currentByte & PackfileConstants.VAR_LEN_VALUE_MASK) << bitShift;
+
+      // If bit 7 is not set, this is the last byte
+      if ((currentByte & PackfileConstants.VAR_LEN_CONTINUATION_FLAG) == 0)
       {
         return true;
       }
-      shift += 7;
+
+      bitShift += 7;
     }
 
     return false;
   }
 
-  private sealed class ThrottledCountingStream : Stream
+  /// <summary>
+  /// Wrapper stream that limits read size and counts bytes read.
+  /// Used to accurately track how many compressed bytes were consumed.
+  /// </summary>
+  private class ThrottledCountingStream(Stream innerStream, int maxReadBytes) : Stream
   {
-    private readonly Stream inner;
-    private readonly int maxReadBytes;
+    private readonly Stream innerStream = innerStream;
+    private readonly int maxReadBytes = Math.Max(1, maxReadBytes);
 
     public long BytesRead { get; private set; }
 
-    public ThrottledCountingStream(Stream inner, int maxReadBytes)
-    {
-      this.inner = inner;
-      this.maxReadBytes = Math.Max(1, maxReadBytes);
-    }
-
-    public override bool CanRead => inner.CanRead;
+    public override bool CanRead => innerStream.CanRead;
     public override bool CanSeek => false;
     public override bool CanWrite => false;
-    public override long Length => inner.Length;
+    public override long Length => innerStream.Length;
     public override long Position
     {
-      get => inner.Position;
+      get => innerStream.Position;
       set => throw new NotSupportedException();
     }
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-      int read = inner.Read(buffer, offset, Math.Min(count, maxReadBytes));
-      BytesRead += read;
-      return read;
+      int bytesRead = innerStream.Read(buffer, offset, Math.Min(count, maxReadBytes));
+      BytesRead += bytesRead;
+      return bytesRead;
     }
 
     public override int ReadByte()
     {
-      int value = inner.ReadByte();
-      if (value != -1)
+      int byteValue = innerStream.ReadByte();
+      if (byteValue != -1)
       {
         BytesRead++;
       }
-      return value;
+      return byteValue;
     }
 
     public override void Flush() => throw new NotSupportedException();

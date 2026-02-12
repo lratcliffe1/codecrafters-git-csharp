@@ -1,77 +1,46 @@
-using System.Text;
-using Helpers;
+using codecrafters_git.src.Services;
 
-namespace Commands;
+namespace codecrafters_git.src.Commands.Clone;
 
-public class CloneHelper()
+public interface ICloneHelper
 {
-  private static readonly HttpClient client = new();
+  Task<string> Clone(string repositoryUrl, string targetDirectory);
+}
 
-  public static async Task<string> Clone(string repositoryUrl, string targetDirectory)
+public class CloneService(
+  IGitProtocolClient gitProtocolClient,
+  IObjectStore objectStore,
+  IPackfileParser packfileParser,
+  ITreeHelper treeHelper,
+  IInitHelper initHelper,
+  IGitRefHelper gitRefHelper) : ICloneHelper
+{
+  public async Task<string> Clone(string repositoryUrl, string targetDirectory)
   {
-    CreateDirectory(targetDirectory);
+    initHelper.Init(targetDirectory + "/");
 
-    // get pack file from git api
-    var protocol = new GitProtocolClient(client);
-    (string sha1, string headRef) = await protocol.DiscoverReferences(repositoryUrl);
-    byte[] packFile = await protocol.FetchPackfile(repositoryUrl, sha1);
+    (string headCommitSha, string headRef) = await gitProtocolClient.DiscoverReferences(repositoryUrl);
+    byte[] packfileData = await gitProtocolClient.FetchPackfile(repositoryUrl, headCommitSha);
 
-    byte[] packData = RemovePackHeader(packFile);
-
-    // set work tree root
-    string originalCwd = Directory.GetCurrentDirectory();
-    string workTreeRoot = Path.Combine(originalCwd, targetDirectory);
+    string originalWorkingDirectory = Directory.GetCurrentDirectory();
+    string workTreeRoot = Path.Combine(originalWorkingDirectory, targetDirectory);
     Directory.SetCurrentDirectory(targetDirectory);
 
-    // parse pack file
-    var objectStore = new ObjectStore();
-    var parser = new PackfileParser(objectStore);
-    parser.ParseAllObjects(packData);
+    try
+    {
+      byte[] packfileWithoutHeader = packfileParser.RemovePackHeader(packfileData);
+      packfileParser.ParseAllObjects(packfileWithoutHeader);
 
-    WriteHeadAndRef(headRef, sha1);
+      gitRefHelper.WriteHead(headRef);
+      gitRefHelper.WriteRef(headRef, headCommitSha);
 
-    TreeHelper.CheckoutWorkingTree(objectStore, workTreeRoot, sha1);
-
-    Directory.SetCurrentDirectory(originalCwd);
+      treeHelper.CheckoutWorkingTree(objectStore, workTreeRoot, headCommitSha);
+    }
+    finally
+    {
+      Directory.SetCurrentDirectory(originalWorkingDirectory);
+    }
 
     return "";
-  }
-
-  private static void CreateDirectory(string targetDirectory)
-  {
-    InitHelper.Init(targetDirectory + "/");
-  }
-
-  private static byte[] RemovePackHeader(byte[] rawData)
-  {
-    int rawPackOffset = FindPattern(rawData, Encoding.ASCII.GetBytes("PACK"));
-
-    return rawData[rawPackOffset..];
-  }
-
-  private static int FindPattern(byte[] data, byte[] pattern)
-  {
-    for (int i = 0; i <= data.Length - pattern.Length; i++)
-    {
-      bool match = true;
-      for (int j = 0; j < pattern.Length; j++)
-      {
-        if (data[i + j] != pattern[j]) { match = false; break; }
-      }
-      if (match) return i;
-    }
-    return -1;
-  }
-
-  private static void WriteHeadAndRef(string headRef, string sha)
-  {
-    File.WriteAllText(".git/HEAD", $"ref: {headRef}\n");
-    string refPath = Path.Combine(".git", headRef.Replace('/', Path.DirectorySeparatorChar));
-    string? refDir = Path.GetDirectoryName(refPath);
-    if (refDir != null && !Directory.Exists(refDir))
-    {
-      Directory.CreateDirectory(refDir);
-    }
-    File.WriteAllText(refPath, $"{sha}\n");
   }
 }

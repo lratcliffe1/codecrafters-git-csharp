@@ -1,61 +1,68 @@
-namespace Commands;
+namespace codecrafters_git.src.Commands.Clone;
 
-internal sealed class GitProtocolClient(HttpClient client)
+public interface IGitProtocolClient
+{
+  Task<(string sha1, string headRef)> DiscoverReferences(string repositoryUrl);
+  Task<byte[]> FetchPackfile(string repositoryUrl, string sha1);
+}
+
+public class GitProtocolClient(HttpClient client) : IGitProtocolClient
 {
   public async Task<(string sha1, string headRef)> DiscoverReferences(string repositoryUrl)
   {
-    string url = $"{repositoryUrl.TrimEnd('/')}/info/refs?service=git-upload-pack";
+    string infoRefsUrl = $"{repositoryUrl.TrimEnd('/')}/info/refs?service=git-upload-pack";
 
-    var request = new HttpRequestMessage(HttpMethod.Get, url);
+    var request = new HttpRequestMessage(HttpMethod.Get, infoRefsUrl);
     request.Headers.Add("User-Agent", "git/2.0.0");
     request.Headers.Add("Accept", "*/*");
 
     HttpResponseMessage response = await client.SendAsync(request);
     response.EnsureSuccessStatusCode();
 
-    string content = await response.Content.ReadAsStringAsync();
+    string responseContent = await response.Content.ReadAsStringAsync();
 
-    var lines = content.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
-    string? headSha = null;
-    string? headRef = null;
+    var responseLines = responseContent.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
+    string? headCommitSha = null;
+    string? headBranchRef = null;
 
-    foreach (var line in lines)
+    foreach (var line in responseLines)
     {
       if (line.Contains("symref=HEAD:refs/heads/"))
       {
-        int start = line.IndexOf("symref=HEAD:", StringComparison.Ordinal);
-        if (start >= 0)
+        int symrefStart = line.IndexOf("symref=HEAD:", StringComparison.Ordinal);
+        if (symrefStart >= 0)
         {
-          string symref = line[(start + "symref=HEAD:".Length)..];
-          int nullIndex = symref.IndexOf('\0');
-          headRef = nullIndex >= 0 ? symref[..nullIndex] : symref;
+          string symrefValue = line[(symrefStart + "symref=HEAD:".Length)..];
+          int nullTerminatorIndex = symrefValue.IndexOf('\0');
+          headBranchRef = nullTerminatorIndex >= 0 ? symrefValue[..nullTerminatorIndex] : symrefValue;
         }
       }
 
-      int headIndex = line.IndexOf(" HEAD", StringComparison.Ordinal);
-      if (headIndex >= 40)
+      int headMarkerIndex = line.IndexOf(" HEAD", StringComparison.Ordinal);
+      if (headMarkerIndex >= 40)
       {
-        headSha = line.Substring(headIndex - 40, 40);
+        headCommitSha = line.Substring(headMarkerIndex - 40, 40);
       }
     }
 
-    return (headSha ?? "", headRef ?? "refs/heads/master");
+    return (headCommitSha ?? "", headBranchRef ?? "refs/heads/master");
   }
 
   public async Task<byte[]> FetchPackfile(string repositoryUrl, string sha1)
   {
-    string url = $"{repositoryUrl.TrimEnd('/')}/git-upload-pack";
+    string uploadPackUrl = $"{repositoryUrl.TrimEnd('/')}/git-upload-pack";
 
-    string body = $"0032want {sha1}\n00000009done\n";
+    string requestBody = $"0032want {sha1}\n00000009done\n";
 
-    var request = new HttpRequestMessage(HttpMethod.Post, url)
+    var request = new HttpRequestMessage(HttpMethod.Post, uploadPackUrl)
     {
-      Content = new StringContent(body)
+      Content = new StringContent(requestBody)
     };
 
     request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/x-git-upload-pack-request");
 
     HttpResponseMessage response = await client.SendAsync(request);
+    response.EnsureSuccessStatusCode();
 
     return await response.Content.ReadAsByteArrayAsync();
   }

@@ -1,6 +1,6 @@
-namespace Helpers;
+namespace codecrafters_git.src.Helpers;
 
-public class InputValidator()
+public static class InputValidator
 {
   public static bool ValidateCatFileInput(string[] args)
   {

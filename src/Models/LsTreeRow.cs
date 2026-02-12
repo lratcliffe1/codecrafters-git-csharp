@@ -1,4 +1,4 @@
-namespace Classes;
+namespace codecrafters_git.src.Models;
 
 public class LsTreeRow(string mode, string hash, string name)
 {

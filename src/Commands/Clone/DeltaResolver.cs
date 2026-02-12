@@ -1,9 +1,11 @@
-namespace Commands;
+using codecrafters_git.src.Models;
 
-internal sealed class DeltaResolver
+namespace codecrafters_git.src.Commands.Clone;
+
+public static class DeltaResolver
 {
   public static bool TryApplyRefDelta(
-    ObjectStore objectStore,
+    IObjectStore objectStore,
     string baseHash,
     byte[] deltaData,
     out int baseType,
@@ -14,13 +16,11 @@ internal sealed class DeltaResolver
 
     if (!objectStore.TryGetObjectByHash(baseHash, out var baseObject))
     {
-      CloneLogger.Log($"RefDelta base not found: {baseHash}");
       return false;
     }
 
     if (!TryApplyDelta(baseObject.Data, deltaData, out byte[] output))
     {
-      CloneLogger.Log($"RefDelta apply failed for base {baseHash}");
       return false;
     }
 
@@ -40,15 +40,15 @@ internal sealed class DeltaResolver
     baseType = 0;
     resolved = [];
 
+    // Look up base object by its offset in the packfile
     if (!TryGetBaseObject(objectsByOffset, baseOffset, baseOffsetAlt, out var baseObject))
     {
-      CloneLogger.Log($"OFSDelta base not found: {baseOffset} or {baseOffsetAlt}");
       return false;
     }
 
+    // Apply delta instructions to base object
     if (!TryApplyDelta(baseObject.Data, deltaData, out byte[] output))
     {
-      CloneLogger.Log($"OFSDelta apply failed for base {baseOffset} or {baseOffsetAlt}");
       return false;
     }
 
@@ -60,15 +60,11 @@ internal sealed class DeltaResolver
   private static bool TryApplyDelta(byte[] baseData, byte[] deltaData, out byte[] output)
   {
     output = [];
-    int index = 0;
+    int deltaIndex = 0;
 
-    long sourceSize = ReadDeltaSize(deltaData, ref index);
-    long targetSize = ReadDeltaSize(deltaData, ref index);
-
-    if (sourceSize != baseData.Length)
-    {
-      CloneLogger.Log("Delta source size mismatch; continuing anyway.");
-    }
+    // Read source and target sizes (variable-length encoded)
+    long sourceSize = ReadDeltaSize(deltaData, ref deltaIndex);
+    long targetSize = ReadDeltaSize(deltaData, ref deltaIndex);
 
     if (targetSize > int.MaxValue)
     {
@@ -76,56 +72,33 @@ internal sealed class DeltaResolver
     }
 
     byte[] result = new byte[targetSize];
-    int outPos = 0;
+    int resultPosition = 0;
 
-    while (index < deltaData.Length && outPos < targetSize)
+    // Process delta commands until we've produced the target size
+    while (deltaIndex < deltaData.Length && resultPosition < targetSize)
     {
-      byte cmd = deltaData[index++];
-      if ((cmd & 0x80) != 0)
+      byte command = deltaData[deltaIndex++];
+
+      if ((command & PackfileConstants.COPY_COMMAND_FLAG) != 0)
       {
-        int copyOffset = 0;
-        int copySize = 0;
-
-        if ((cmd & 0x01) != 0) copyOffset |= deltaData[index++];
-        if ((cmd & 0x02) != 0) copyOffset |= deltaData[index++] << 8;
-        if ((cmd & 0x04) != 0) copyOffset |= deltaData[index++] << 16;
-        if ((cmd & 0x08) != 0) copyOffset |= deltaData[index++] << 24;
-
-        if ((cmd & 0x10) != 0) copySize |= deltaData[index++];
-        if ((cmd & 0x20) != 0) copySize |= deltaData[index++] << 8;
-        if ((cmd & 0x40) != 0) copySize |= deltaData[index++] << 16;
-
-        if (copySize == 0)
-        {
-          copySize = 0x10000;
-        }
-
-        if (copyOffset < 0 || copyOffset + copySize > baseData.Length)
+        // COPY command: copy data from base object
+        if (!TryExecuteCopyCommand(command, deltaData, ref deltaIndex, baseData, result, ref resultPosition))
         {
           return false;
         }
-
-        Buffer.BlockCopy(baseData, copyOffset, result, outPos, copySize);
-        outPos += copySize;
       }
       else
       {
-        int addSize = cmd & 0x7F;
-        if (addSize > 0)
+        // ADD command: add new data from delta
+        if (!TryExecuteAddCommand(command, deltaData, ref deltaIndex, result, ref resultPosition))
         {
-          if (index + addSize > deltaData.Length || outPos + addSize > result.Length)
-          {
-            return false;
-          }
-
-          Buffer.BlockCopy(deltaData, index, result, outPos, addSize);
-          index += addSize;
-          outPos += addSize;
+          return false;
         }
       }
     }
 
-    if (outPos != targetSize)
+    // Verify we produced exactly the target size
+    if (resultPosition != targetSize)
     {
       return false;
     }
@@ -134,20 +107,92 @@ internal sealed class DeltaResolver
     return true;
   }
 
+  private static bool TryExecuteCopyCommand(
+    byte command,
+    byte[] deltaData,
+    ref int deltaIndex,
+    byte[] baseData,
+    byte[] result,
+    ref int resultPosition)
+  {
+    int copyOffset = 0;
+    int copySize = 0;
+
+    // Read copy offset bytes (variable-length, up to 4 bytes)
+    if ((command & PackfileConstants.COPY_OFFSET_BYTE_0) != 0) copyOffset |= deltaData[deltaIndex++];
+    if ((command & PackfileConstants.COPY_OFFSET_BYTE_1) != 0) copyOffset |= deltaData[deltaIndex++] << 8;
+    if ((command & PackfileConstants.COPY_OFFSET_BYTE_2) != 0) copyOffset |= deltaData[deltaIndex++] << 16;
+    if ((command & PackfileConstants.COPY_OFFSET_BYTE_3) != 0) copyOffset |= deltaData[deltaIndex++] << 24;
+
+    // Read copy size bytes (variable-length, up to 3 bytes)
+    if ((command & PackfileConstants.COPY_SIZE_BYTE_0) != 0) copySize |= deltaData[deltaIndex++];
+    if ((command & PackfileConstants.COPY_SIZE_BYTE_1) != 0) copySize |= deltaData[deltaIndex++] << 8;
+    if ((command & PackfileConstants.COPY_SIZE_BYTE_2) != 0) copySize |= deltaData[deltaIndex++] << 16;
+
+    // Size 0 means copy 64KB (Git's special case)
+    if (copySize == 0)
+    {
+      copySize = PackfileConstants.DEFAULT_COPY_SIZE;
+    }
+
+    // Validate bounds
+    if (copyOffset < 0 || copyOffset + copySize > baseData.Length)
+    {
+      return false;
+    }
+
+    // Copy data from base to result
+    Buffer.BlockCopy(baseData, copyOffset, result, resultPosition, copySize);
+    resultPosition += copySize;
+    return true;
+  }
+
+  private static bool TryExecuteAddCommand(
+    byte command,
+    byte[] deltaData,
+    ref int deltaIndex,
+    byte[] result,
+    ref int resultPosition)
+  {
+    // ADD command: lower 7 bits contain the size
+    int addSize = command & PackfileConstants.ADD_SIZE_MASK;
+
+    if (addSize > 0)
+    {
+      // Validate bounds
+      if (deltaIndex + addSize > deltaData.Length || resultPosition + addSize > result.Length)
+      {
+        return false;
+      }
+
+      // Copy new data from delta to result
+      Buffer.BlockCopy(deltaData, deltaIndex, result, resultPosition, addSize);
+      deltaIndex += addSize;
+      resultPosition += addSize;
+    }
+
+    return true;
+  }
+
   private static long ReadDeltaSize(byte[] data, ref int index)
   {
     long size = 0;
-    int shift = 0;
+    int bitShift = 0;
+
     while (index < data.Length)
     {
-      byte b = data[index++];
-      size |= (long)(b & 0x7F) << shift;
-      if ((b & 0x80) == 0)
+      byte currentByte = data[index++];
+      size |= (long)(currentByte & PackfileConstants.VAR_LEN_VALUE_MASK) << bitShift;
+
+      // If bit 7 is not set, this is the last byte
+      if ((currentByte & PackfileConstants.VAR_LEN_CONTINUATION_FLAG) == 0)
       {
         break;
       }
-      shift += 7;
+
+      bitShift += 7;
     }
+
     return size;
   }
 
@@ -157,11 +202,13 @@ internal sealed class DeltaResolver
     int? baseOffsetAlt,
     out GitObject baseObject)
   {
+    // Try primary offset first (calculated from object start)
     if (baseOffset.HasValue && objectsByOffset.TryGetValue(baseOffset.Value, out baseObject))
     {
       return true;
     }
 
+    // Try alternative offset (calculated from after header)
     if (baseOffsetAlt.HasValue && objectsByOffset.TryGetValue(baseOffsetAlt.Value, out baseObject))
     {
       return true;

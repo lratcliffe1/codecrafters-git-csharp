@@ -1,49 +1,37 @@
-using Commands;
-using Helpers;
+using Microsoft.Extensions.DependencyInjection;
+using codecrafters_git.src.Commands;
+using codecrafters_git.src.Commands.Clone;
+using codecrafters_git.src.Helpers;
+using codecrafters_git.src.Services;
+using codecrafters_git.src;
 
-if (args is not [var command, ..])
-{
-  Console.WriteLine("Please provide a command.");
-  return;
-}
+// Set up dependency injection
+var services = new ServiceCollection();
 
-try
-{
-  switch (command)
-  {
-    case "init":
-      Console.Write(InitHelper.Init());
-      break;
+// Register services
+services.AddTransient<IInitHelper, InitService>();
+services.AddTransient<IBlobHelper, BlobService>();
+services.AddTransient<ITreeHelper, TreeService>();
+services.AddTransient<ICommitHelper, CommitService>();
+services.AddSingleton<ISharedUtils, SharedUtilsService>();
+services.AddTransient<IGitObjectWriter, GitObjectWriter>();
+services.AddTransient<IGitRefHelper, GitRefHelper>();
+services.AddTransient<IPackfileParser, PackfileParser>();
 
-    case "cat-file" when InputValidator.ValidateCatFileInput(args):
-      Console.Write(BlobHelper.ReadBlobContent(args[2]));
-      break;
+// Register HttpClient for GitProtocolClient
+services.AddHttpClient<GitProtocolClient>();
+services.AddTransient<IGitProtocolClient>(sp => sp.GetRequiredService<GitProtocolClient>());
 
-    case "hash-object" when InputValidator.ValidateHashObjectInput(args):
-      Console.WriteLine(BlobHelper.WriteBlobObjectFromFile(args[2]));
-      break;
+// For clone command, we need scoped services (ObjectStore should be per clone operation)
+services.AddScoped<IObjectStore, ObjectStore>();
+services.AddScoped<ICloneHelper, CloneService>();
 
-    case "ls-tree" when InputValidator.ValidateLsTreeInput(args):
-      Console.WriteLine(args.Length == 3 ? TreeHelper.ListTreeNameOnly(args[2]) : TreeHelper.ListTree(args[1]));
-      break;
+// Register command handler
+services.AddTransient<IGitCommandHandler, GitCommandHandler>();
 
-    case "write-tree" when InputValidator.ValidateWriteTreeInput(args):
-      Console.WriteLine(TreeHelper.WriteTreeObject(Directory.GetCurrentDirectory()));
-      break;
+var serviceProvider = services.BuildServiceProvider();
 
-    case "commit-tree" when InputValidator.ValidateCommitInput(args):
-      Console.WriteLine(CommitHelper.Commit(args[1], args[3], args[5]));
-      break;
-
-    case "clone" when InputValidator.ValidateCloneInput(args):
-      Console.WriteLine(await CloneHelper.Clone(args[1], args[2]));
-      break;
-
-    default:
-      throw new ArgumentException($"Unknown or invalid command: {command}");
-  }
-}
-catch (ArgumentException ex)
-{
-  Console.WriteLine(ex.Message);
-}
+// Execute command - create a scope for scoped services
+using var scope = serviceProvider.CreateScope();
+var commandHandler = scope.ServiceProvider.GetRequiredService<IGitCommandHandler>();
+await commandHandler.ExecuteAsync(args);

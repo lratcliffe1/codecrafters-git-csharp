@@ -1,7 +1,12 @@
 using System.Text;
-using Helpers;
+using codecrafters_git.src.Services;
 
-namespace Commands;
+namespace codecrafters_git.src.Commands;
+
+public interface ICommitHelper
+{
+  string Commit(string treeHash, string parentHash, string message);
+}
 
 /// <summary>
 /// commit <size>\0tree <tree_sha>
@@ -11,24 +16,15 @@ namespace Commands;
 ///
 /// <commit message>
 /// </summary>
-public class CommitHelper
+public class CommitService(IGitObjectWriter gitObjectWriter) : ICommitHelper
 {
-  public static string Commit(string treeHash, string parentHash, string message)
+  public string Commit(string treeHash, string parentHash, string message)
   {
     string timestampAndTimezone = GetFormattedTimestamp();
-
     string author = GetFormattedAuthor();
-
     byte[] contents = CreateCommitBody(parentHash, author, timestampAndTimezone, message);
 
-    byte[] fullCommitObject = SharedUtils.AddHeaderString(contents, "commit", $"tree {treeHash}\n");
-
-    string commitHash = SharedUtils.CreateBlobHash(fullCommitObject);
-    string commitPath = SharedUtils.CreateBlobPath(commitHash);
-
-    SharedUtils.SaveBlobContent(fullCommitObject, commitPath);
-
-    return commitHash;
+    return gitObjectWriter.WriteObject("commit", contents, $"tree {treeHash}\n");
   }
 
   private static string GetFormattedTimestamp()

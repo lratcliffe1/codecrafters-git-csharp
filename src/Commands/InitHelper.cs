@@ -1,8 +1,13 @@
-namespace Commands;
+namespace codecrafters_git.src.Commands;
 
-public class InitHelper()
+public interface IInitHelper
 {
-  public static string Init(string? directory = null)
+  string Init(string? directory = null);
+}
+
+public class InitService : IInitHelper
+{
+  public string Init(string? directory = null)
   {
     Directory.CreateDirectory($"{directory}.git");
     Directory.CreateDirectory($"{directory}.git/objects");
